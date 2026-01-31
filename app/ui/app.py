@@ -4,6 +4,12 @@ Streamlit main app for GraphSAGE Recommender System.
 Run: streamlit run app/ui/app.py --server.port 8501
 """
 
+import sys
+from pathlib import Path
+
+# Add project root so "app" package resolves correctly
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
 import streamlit as st
 
 from app.ui.utils.session_state import init_session_state

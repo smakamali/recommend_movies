@@ -7,7 +7,7 @@ Implements fit() and test() methods compatible with evaluation.py.
 
 import torch
 import numpy as np
-from surprise import Prediction
+from poc.trainset import Prediction
 
 # Handle both relative imports (when used as module) and absolute imports (when run as script)
 try:
@@ -225,8 +225,7 @@ class GraphSAGERecommenderWrapper:
             # Predict rating
             pred_r = self.predict(str(uid), str(iid))
             
-            # Create Surprise Prediction object
-            # Format: Prediction(uid, iid, r_ui, est, details)
+            # Create Prediction object (Surprise-compatible: uid, iid, r_ui, est, details)
             pred = Prediction(uid, iid, true_r, pred_r, {})
             predictions.append(pred)
         

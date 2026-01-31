@@ -17,6 +17,10 @@ Usage:
 Author: Agent 1 - GraphSAGE Recommender System
 """
 
+# Mitigate OpenMP libiomp5md.dll conflict (PyTorch/NumPy/MKL)
+import os
+os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+
 import sys
 import argparse
 from pathlib import Path

@@ -159,22 +159,27 @@ class ModelLoader:
                 "Please ensure the model has been trained and saved."
             )
         
-        # Extract configuration from metadata
-        num_users = metadata.get('num_users_trained', 943)
-        num_items = metadata.get('num_movies', 1682)
-        hidden_dim = metadata.get('hidden_dim', 64)
-        num_layers = metadata.get('num_layers', 3)
-        dropout = metadata.get('hyperparameters', {}).get('dropout', 0.1)
-        aggregator = metadata.get('aggregator', 'max')
+        # Extract configuration from metadata (use saved dims to match trained weights)
+        hp = metadata.get('hyperparameters', {})
+        num_users = metadata.get('num_users_trained', hp.get('num_users', 943))
+        num_items = metadata.get('num_movies', hp.get('num_items', 1682))
+        hidden_dim = metadata.get('hidden_dim', hp.get('hidden_dim', 64))
+        num_layers = metadata.get('num_layers', hp.get('num_layers', 3))
+        dropout = hp.get('dropout', 0.1)
+        aggregator = metadata.get('aggregator', hp.get('aggregator', 'max'))
         
-        # Get feature dimensions from preprocessor
-        # User features: age (1) + gender (n) + occupation (n)
-        n_genders = len(preprocessor.gender_encoder.classes_)
-        n_occupations = len(preprocessor.occupation_encoder.classes_)
-        user_feat_dim = 1 + n_genders + n_occupations
-        
-        # Item features: year (1) + genres (19)
-        item_feat_dim = 1 + 19
+        # Use feature dimensions from metadata (training pads both to max)
+        user_feat_dim = hp.get('user_feat_dim')
+        item_feat_dim = hp.get('item_feat_dim')
+        if user_feat_dim is None or item_feat_dim is None:
+            # Fallback: derive from preprocessor
+            n_genders = len(preprocessor.gender_encoder.classes_)
+            n_occupations = len(preprocessor.occupation_encoder.classes_)
+            user_feat_raw = 1 + n_genders + n_occupations
+            item_feat_raw = 1 + 19
+            feat_dim = max(user_feat_raw, item_feat_raw)
+            user_feat_dim = user_feat_dim if user_feat_dim is not None else feat_dim
+            item_feat_dim = item_feat_dim if item_feat_dim is not None else feat_dim
         
         logger.debug(f"Initializing model with:")
         logger.debug(f"  num_users={num_users}, num_items={num_items}")
@@ -196,7 +201,7 @@ class ModelLoader:
         
         # Load trained weights
         try:
-            state_dict = torch.load(model_path, map_location=self.device)
+            state_dict = torch.load(model_path, map_location=self.device, weights_only=False)
             model.load_state_dict(state_dict)
             model.to(self.device)
             model.eval()  # Set to evaluation mode

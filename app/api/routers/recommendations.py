@@ -27,6 +27,11 @@ def get_recommendations(
     engine: InferenceEngine = Depends(get_inference_engine),
 ):
     """Get personalized recommendations for a user (cold-start and warm-start)."""
+    if engine.model is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Model not loaded. Run python scripts/train_model.py to train a model.",
+        )
     _ensure_graph_initialized(engine, db)
     from app.database import crud
     user_obj = crud.get_user(db, user_id)
@@ -64,6 +69,11 @@ def refresh_recommendations(
     engine: InferenceEngine = Depends(get_inference_engine),
 ):
     """Refresh recommendations (invalidate cache and regenerate)."""
+    if engine.model is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Model not loaded. Run python scripts/train_model.py to train a model.",
+        )
     _ensure_graph_initialized(engine, db)
     from app.database import crud
     user_obj = crud.get_user(db, user_id)

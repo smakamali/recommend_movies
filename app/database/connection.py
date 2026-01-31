@@ -6,6 +6,7 @@ and provides utilities for database operations.
 """
 
 import os
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Generator
 from sqlalchemy import create_engine, event
@@ -135,6 +136,7 @@ class DatabaseManager:
         """
         return self.SessionLocal()
     
+    @contextmanager
     def session_scope(self) -> Generator[Session, None, None]:
         """
         Context manager for database sessions.

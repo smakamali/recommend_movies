@@ -17,47 +17,58 @@ from collections import defaultdict
 from sklearn.preprocessing import StandardScaler, LabelEncoder
 import scipy.sparse as sp
 
-# Note: surprise is imported lazily in functions that need it to avoid NumPy 2.x
-# compatibility issues when only FeaturePreprocessor is used (e.g. API inference)
+# Note: Surprise removed - using SimpleTrainset and custom loaders
 
 
 def load_movielens_100k(data_dir='data'):
     """
-    Load MovieLens 100K dataset using Surprise library.
+    Load MovieLens 100K dataset from u.data file.
     
-    The dataset is automatically downloaded if not present locally.
+    The dataset is downloaded if not present locally (via get_movielens_data_path).
     
     Args:
-        data_dir (str): Directory to store the dataset (default: 'data')
+        data_dir (str): Directory hint (default: 'data')
         
     Returns:
-        Dataset: Surprise Dataset object containing the MovieLens 100K data
+        list: List of (user_id, item_id, rating) tuples
     """
-    from surprise import Dataset
-    # Surprise has built-in support for MovieLens datasets
-    # This will download automatically if needed
-    data = Dataset.load_builtin('ml-100k')
-    return data
+    data_path = get_movielens_data_path()
+    ratings_file = os.path.join(data_path, 'u.data')
+    
+    ratings_list = []
+    with open(ratings_file, 'r', encoding='latin-1') as f:
+        for line in f:
+            parts = line.strip().split()
+            if len(parts) >= 3:
+                uid, iid, rating = parts[0], parts[1], float(parts[2])
+                ratings_list.append((uid, iid, rating))
+    
+    return ratings_list
 
 
-def get_train_test_split(data, test_size=0.2, random_state=42):
+def get_train_test_split(ratings_list, test_size=0.2, random_state=42):
     """
-    Split dataset into training and testing sets.
+    Split ratings into train/test sets.
     
     Args:
-        data: Surprise Dataset object
+        ratings_list: List of (user_id, item_id, rating) tuples
         test_size (float): Proportion of data for testing (default: 0.2)
         random_state (int): Random seed for reproducibility (default: 42)
         
     Returns:
-        tuple: (trainset, testset) where testset is a list of tuples (uid, iid, rating)
+        tuple: (trainset, testset) where trainset is SimpleTrainset, testset is list of (uid, iid, rating)
     """
-    from surprise.model_selection import train_test_split
-    trainset, testset = train_test_split(
-        data, 
-        test_size=test_size, 
-        random_state=random_state
+    from sklearn.model_selection import train_test_split
+    from poc.trainset import SimpleTrainset
+    
+    train_ratings, test_ratings = train_test_split(
+        ratings_list,
+        test_size=test_size,
+        random_state=random_state,
+        shuffle=True,
     )
+    trainset = SimpleTrainset(train_ratings)
+    testset = [tuple(r) for r in test_ratings]
     return trainset, testset
 
 
@@ -68,12 +79,9 @@ def load_dataframe_from_builtin():
     Returns:
         pd.DataFrame: DataFrame with columns ['user_id', 'item_id', 'rating', 'timestamp']
     """
-    from surprise import Dataset
-    # Get the path to the built-in dataset
-    data = Dataset.load_builtin('ml-100k')
-    
-    # Convert to pandas DataFrame
-    df = pd.DataFrame(data.raw_ratings, columns=['user_id', 'item_id', 'rating', 'timestamp'])
+    ratings_list = load_movielens_100k()
+    df = pd.DataFrame(ratings_list, columns=['user_id', 'item_id', 'rating'])
+    df['timestamp'] = 0  # Not used
     return df
 
 
@@ -82,7 +90,7 @@ def get_dataset_stats(data):
     Print statistics about the dataset.
     
     Args:
-        data: Surprise Dataset object
+        data: List of (uid, iid, rating) tuples
     """
     df = load_dataframe_from_builtin()
     
@@ -110,20 +118,7 @@ def get_movielens_data_path():
     Returns:
         str: Path to directory containing MovieLens 100K files
     """
-    # Try to get path from Surprise
-    try:
-        from surprise import Dataset
-        data = Dataset.load_builtin('ml-100k')
-        # Surprise stores data in home directory under .surprise_data
-        home_dir = Path.home()
-        surprise_data_dir = home_dir / '.surprise_data' / 'ml-100k'
-        
-        if surprise_data_dir.exists() and (surprise_data_dir / 'u.user').exists():
-            return str(surprise_data_dir)
-    except:
-        pass
-    
-    # Alternative: check common locations
+    # Check common locations for MovieLens 100K data
     possible_paths = [
         Path.home() / '.surprise_data' / 'ml-100k',
         Path('data') / 'ml-100k',
@@ -563,7 +558,7 @@ def get_cold_start_split(data, test_size=0.2, random_state=42,
     Create train/test split with explicit cold start subset.
     
     Args:
-        data: Surprise Dataset object
+        data: List of (uid, iid, rating) tuples
         user_features: DataFrame with user features
         item_features: DataFrame with item features
         cold_start_ratio: Fraction of test set to reserve for cold start (default: 0.1, not used for user-based definition)
@@ -574,18 +569,12 @@ def get_cold_start_split(data, test_size=0.2, random_state=42,
         
     Returns:
         tuple: (trainset, testset, cold_start_users, cold_start_items)
-        - trainset: Surprise Trainset
+        - trainset: SimpleTrainset
         - testset: List of (uid, iid, rating) tuples
         - cold_start_users: Set of user IDs with <cold_user_threshold ratings in training
         - cold_start_items: Set of item IDs with <cold_item_threshold ratings in training
     """
-    from surprise.model_selection import train_test_split
-    # Standard train/test split
-    trainset, testset = train_test_split(
-        data, 
-        test_size=test_size, 
-        random_state=random_state
-    )
+    trainset, testset = get_train_test_split(data, test_size=test_size, random_state=random_state)
     
     # Get users and items in training set, count ratings per user/item
     train_users = set()
@@ -627,7 +616,7 @@ def find_cold_start_threshold(data, user_features, item_features,
     Find the cold_user_threshold that yields approximately target_count cold start users.
     
     Args:
-        data: Surprise Dataset object
+        data: List of (uid, iid, rating) tuples
         user_features: DataFrame with user features
         item_features: DataFrame with item features
         target_count (int): Target number of cold start users (default: 500)
@@ -639,13 +628,7 @@ def find_cold_start_threshold(data, user_features, item_features,
     Returns:
         int: Recommended cold_user_threshold value
     """
-    from surprise.model_selection import train_test_split
-    # Standard train/test split
-    trainset, testset = train_test_split(
-        data, 
-        test_size=test_size, 
-        random_state=random_state
-    )
+    trainset, testset = get_train_test_split(data, test_size=test_size, random_state=random_state)
     
     # Count ratings per user in training set
     user_rating_counts = defaultdict(int)

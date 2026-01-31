@@ -2,7 +2,7 @@
 Data loader for training pipeline.
 
 Loads data from SQLite database and converts to format compatible
-with the POC GraphSAGE training code (Surprise Trainset format).
+with the POC GraphSAGE training code (SimpleTrainset format).
 """
 
 import sys
@@ -11,13 +11,13 @@ import numpy as np
 import json
 from pathlib import Path
 from typing import Tuple, List, Dict
-from surprise import Dataset, Reader, Trainset
-from surprise.model_selection import train_test_split as surprise_split
+from sklearn.model_selection import train_test_split as sk_split
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
 from app.database import get_db_manager, crud
+from poc.trainset import SimpleTrainset
 
 
 def load_data_from_database(db_path: str = "data/recommender.db") -> Tuple[pd.DataFrame, pd.DataFrame, List[Tuple]]:
@@ -84,9 +84,9 @@ def load_data_from_database(db_path: str = "data/recommender.db") -> Tuple[pd.Da
         session.close()
 
 
-def create_surprise_trainset(ratings_list: List[Tuple], test_size: float = 0.2, random_state: int = 42) -> Tuple[Trainset, List]:
+def create_trainset(ratings_list: List[Tuple], test_size: float = 0.2, random_state: int = 42) -> Tuple[SimpleTrainset, List]:
     """
-    Convert ratings to Surprise Trainset format with train/test split.
+    Convert ratings to SimpleTrainset format with train/test split.
     
     Args:
         ratings_list: List of (user_id, item_id, rating) tuples
@@ -94,17 +94,21 @@ def create_surprise_trainset(ratings_list: List[Tuple], test_size: float = 0.2, 
         random_state: Random seed
         
     Returns:
-        Tuple of (trainset, testset)
+        Tuple of (trainset, testset) where testset is list of (uid, iid, rating)
     """
-    # Create DataFrame for Surprise
-    ratings_df = pd.DataFrame(ratings_list, columns=['user_id', 'item_id', 'rating'])
+    if len(ratings_list) == 0:
+        raise ValueError("Ratings list cannot be empty")
     
-    # Create Surprise Dataset
-    reader = Reader(rating_scale=(1, 5))
-    data = Dataset.load_from_df(ratings_df[['user_id', 'item_id', 'rating']], reader)
+    # Split into train/test using sklearn
+    train_ratings, test_ratings = sk_split(
+        ratings_list,
+        test_size=test_size,
+        random_state=random_state,
+        shuffle=True,
+    )
     
-    # Split into train/test
-    trainset, testset = surprise_split(data, test_size=test_size, random_state=random_state)
+    trainset = SimpleTrainset(train_ratings)
+    testset = [tuple(r) for r in test_ratings]  # List of (uid, iid, rating)
     
     print(f"Train/test split:")
     print(f"  Train ratings: {trainset.n_ratings}")
@@ -170,7 +174,7 @@ def load_training_data(db_path: str = "data/recommender.db", test_size: float = 
         
     Returns:
         Dict with:
-        - trainset: Surprise Trainset
+        - trainset: SimpleTrainset (Trainset-compatible)
         - testset: List of test samples
         - user_features_df: User features
         - item_features_df: Movie features
@@ -181,7 +185,7 @@ def load_training_data(db_path: str = "data/recommender.db", test_size: float = 
     users_df, movies_df, ratings_list = load_data_from_database(db_path)
     
     # Create train/test split
-    trainset, testset = create_surprise_trainset(ratings_list, test_size, random_state)
+    trainset, testset = create_trainset(ratings_list, test_size, random_state)
     
     # Extract features
     user_features_df = extract_user_features(users_df)
