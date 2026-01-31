@@ -1,0 +1,24 @@
+# GraphSAGE Recommender - Single container (API + data)
+# Run: docker-compose up --build
+# API: http://localhost:8000  Docs: http://localhost:8000/docs
+
+services:
+  recommender-api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: recommender-api
+    ports:
+      - "8000:8000"
+    volumes:
+      - ../data:/app/data
+      - ../models:/app/models
+      - ../logs:/app/logs
+    environment:
+      - DATABASE_URL=sqlite:///data/recommender.db
+      - MODEL_PATH=/app/models/current
+      - LOG_LEVEL=INFO
+      - API_HOST=0.0.0.0
+      - API_PORT=8000
+    command: uvicorn app.api.main:app --host 0.0.0.0 --port 8000
+    restart: unless-stopped
