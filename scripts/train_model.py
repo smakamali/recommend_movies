@@ -25,25 +25,70 @@ import sys
 import argparse
 from pathlib import Path
 
+import yaml
+
 # Add project root to path
-sys.path.insert(0, str(Path(__file__).parent.parent))
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
 
 from app.core.training.train import train_model
 
+DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config" / "model_config.yaml"
+
+
+def load_model_config(config_path: Path) -> dict:
+    """Load model and training defaults from YAML. Missing file or keys use fallbacks."""
+    fallback = {
+        "model": {
+            "hidden_dim": 64,
+            "num_layers": 3,
+            "aggregator": "max",
+            "dropout": 0.1,
+        },
+        "training": {
+            "learning_rate": 0.001,
+            "batch_size": 512,
+            "num_epochs": 50,
+            "early_stopping_patience": 5,
+            "early_stopping_min_delta": 1e-4,
+            "loss_type": "mse",
+        },
+    }
+    if not config_path.is_file():
+        return fallback
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+        model = {**fallback["model"], **(data.get("model") or {})}
+        training = {**fallback["training"], **(data.get("training") or {})}
+        return {"model": model, "training": training}
+    except Exception:
+        return fallback
+
 
 def main():
-    """Main CLI entry point."""
-    
+    """Main CLI entry point. Defaults from config/model_config.yaml; CLI args override."""
+    # Parse --config first so we can load defaults from the right file
+    pre = argparse.ArgumentParser()
+    pre.add_argument('--config', type=Path, default=None)
+    pre_args, _ = pre.parse_known_args()
+    config_path = pre_args.config if pre_args.config is not None else DEFAULT_CONFIG_PATH
+    cfg = load_model_config(config_path)
+    m, t = cfg["model"], cfg["training"]
+
     parser = argparse.ArgumentParser(
         description="Train GraphSAGE recommendation model",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Train with default parameters (recommended)
+  # Train with default parameters (from config/model_config.yaml)
   python scripts/train_model.py
 
-  # Custom epochs and batch size
+  # Override epochs and batch size
   python scripts/train_model.py --epochs 30 --batch-size 1024
+
+  # Use a different config file
+  python scripts/train_model.py --config path/to/config.yaml
 
   # Force CPU training
   python scripts/train_model.py --device cpu
@@ -55,7 +100,13 @@ Examples:
   python scripts/train_model.py --output-dir models/v1.0.0
         """
     )
-    
+    parser.add_argument(
+        '--config',
+        type=Path,
+        default=None,
+        help=f'Path to model config YAML (default: {DEFAULT_CONFIG_PATH})'
+    )
+
     # Database and data
     parser.add_argument(
         '--db-path',
@@ -63,72 +114,72 @@ Examples:
         default='data/recommender.db',
         help='Path to SQLite database (default: data/recommender.db)'
     )
-    
-    # Model architecture
+
+    # Model architecture (defaults from config)
     parser.add_argument(
         '--hidden-dim',
         type=int,
-        default=64,
-        help='Hidden dimension size (default: 64)'
+        default=m["hidden_dim"],
+        help=f'Hidden dimension size (default from config: {m["hidden_dim"]})'
     )
     parser.add_argument(
         '--num-layers',
         type=int,
-        default=3,
-        help='Number of GraphSAGE layers (default: 3)'
+        default=m["num_layers"],
+        help=f'Number of GraphSAGE layers (default from config: {m["num_layers"]})'
     )
     parser.add_argument(
         '--aggregator',
         type=str,
-        default='max',
+        default=m["aggregator"],
         choices=['mean', 'max', 'lstm'],
-        help='Aggregator type (default: max)'
+        help=f'Aggregator type (default from config: {m["aggregator"]})'
     )
     parser.add_argument(
         '--dropout',
         type=float,
-        default=0.1,
-        help='Dropout rate (default: 0.1)'
+        default=m["dropout"],
+        help=f'Dropout rate (default from config: {m["dropout"]})'
     )
-    
-    # Training hyperparameters
+
+    # Training hyperparameters (defaults from config)
     parser.add_argument(
         '--loss-type',
         type=str,
-        default='mse',
+        default=t["loss_type"],
         choices=['mse', 'mae', 'bce'],
-        help='Loss function (default: mse)'
+        help=f'Loss function (default from config: {t["loss_type"]})'
     )
     parser.add_argument(
         '--lr', '--learning-rate',
         type=float,
-        default=0.001,
+        default=t["learning_rate"],
         dest='learning_rate',
-        help='Learning rate (default: 0.001)'
+        help=f'Learning rate (default from config: {t["learning_rate"]})'
     )
     parser.add_argument(
         '--batch-size',
         type=int,
-        default=512,
-        help='Batch size (default: 512)'
+        default=t["batch_size"],
+        help=f'Batch size (default from config: {t["batch_size"]})'
     )
     parser.add_argument(
         '--epochs',
         type=int,
-        default=50,
-        help='Number of training epochs (default: 50)'
+        default=t["num_epochs"],
+        help=f'Number of training epochs (default from config: {t["num_epochs"]})'
     )
     parser.add_argument(
         '--early-stopping-patience',
         type=int,
-        default=5,
-        help='Early stopping patience (default: 5)'
+        default=t["early_stopping_patience"],
+        help=f'Early stopping patience (default from config: {t["early_stopping_patience"]})'
     )
     parser.add_argument(
         '--early-stopping-min-delta',
         type=float,
-        default=1e-4,
-        help='Minimum delta for early stopping (default: 1e-4)'
+        default=t["early_stopping_min_delta"],
+        help=f'Minimum delta for early stopping (default from config: {t["early_stopping_min_delta"]})'
     )
     
     # Output and device
