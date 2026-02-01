@@ -14,6 +14,7 @@ def render_movie_card(
     score: float,
     show_rating_widget: bool = False,
     on_rate: callable = None,
+    user_rating: float | None = None,
 ) -> None:
     """
     Render a movie card with optional rating widget.
@@ -26,6 +27,7 @@ def render_movie_card(
         score: Predicted/recommendation score
         show_rating_widget: Whether to show star rating widget
         on_rate: Callback(user_id, movie_id, rating) when user rates
+        user_rating: User's existing rating (if any) to pre-fill the widget
     """
     try:
         genre_list = json.loads(genres) if genres else []
@@ -48,5 +50,5 @@ def render_movie_card(
         with col2:
             if show_rating_widget and on_rate:
                 from app.ui.components.rating_widget import render_rating_widget
-                render_rating_widget(movie_id, on_rate)
+                render_rating_widget(movie_id, on_rate, current_rating=user_rating)
         st.divider()

@@ -33,15 +33,28 @@ if not user_id:
 def handle_rate(uid: int, mid: int, rating: float) -> None:
     """Callback when user submits a rating."""
     add_rating(uid, mid, rating)
-    st.session_state["recommendations_refresh"] = st.session_state.get("recommendations_refresh", 0) + 1
 
 
-# Refresh button
-col1, col2, col3 = st.columns([1, 2, 1])
-with col2:
+# Initialize exclude_already_rated in session state if not present
+if "exclude_already_rated" not in st.session_state:
+    st.session_state["exclude_already_rated"] = False
+
+# Options row: toggle + refresh button
+col1, col2, col3, col4 = st.columns([1, 1, 1, 2])
+with col1:
+    exclude_already_rated = st.toggle(
+        "Exclude already rated",
+        value=st.session_state["exclude_already_rated"],
+        help="When on, movies you've rated are excluded from recommendations",
+    )
+    st.session_state["exclude_already_rated"] = exclude_already_rated
+with col3:
     if st.button("🔄 Refresh Recommendations", use_container_width=True):
         try:
-            refresh_recommendations(user_id)
+            refresh_recommendations(
+                user_id,
+                exclude_already_rated=st.session_state["exclude_already_rated"],
+            )
             st.success("Recommendations refreshed!")
             st.rerun()
         except Exception as e:
@@ -50,7 +63,12 @@ with col2:
 st.divider()
 
 try:
-    data = get_recommendations(user_id, n=10, exclude_low_rated=True)
+    data = get_recommendations(
+        user_id,
+        n=10,
+        exclude_low_rated=True,
+        exclude_already_rated=st.session_state["exclude_already_rated"],
+    )
     recs = data.get("recommendations", [])
     if recs:
         st.subheader("Recommended for you")
@@ -63,6 +81,7 @@ try:
                 score=r.get("score", 0),
                 show_rating_widget=True,
                 on_rate=handle_rate,
+                user_rating=r.get("user_rating"),
             )
     else:
         st.info("No recommendations available. Rate some movies to improve your recommendations!")

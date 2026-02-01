@@ -26,6 +26,7 @@ class User(Base):
     
     Attributes:
         user_id: Primary key, auto-incremented
+        name: User's display name (optional)
         age: User's age (required)
         gender: User's gender ('M', 'F', or 'O')
         occupation: User's occupation
@@ -36,6 +37,7 @@ class User(Base):
     __tablename__ = 'users'
     
     user_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str | None] = mapped_column(String(100), nullable=True)
     age: Mapped[int] = mapped_column(Integer, nullable=False)
     gender: Mapped[str] = mapped_column(String(1), nullable=False)
     occupation: Mapped[str] = mapped_column(String(50), nullable=False)

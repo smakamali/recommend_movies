@@ -250,29 +250,32 @@ class InferenceEngine:
         self,
         session: Session,
         user_id: int,
-        n: int = 10
+        n: int = 10,
+        exclude_already_rated: bool = False
     ) -> List[Dict[str, Any]]:
         """
         Refresh recommendations by invalidating cache and regenerating.
-        
+
         Args:
             session: Database session
             user_id: User ID
             n: Number of recommendations (default: 10)
-            
+            exclude_already_rated: Exclude movies already rated (default: False)
+
         Returns:
             List of recommendation dictionaries
         """
         logger.info(f"Refreshing recommendations for user {user_id}")
-        
+
         # Invalidate cache
         self._invalidate_cache()
-        
+
         # Generate new recommendations
         return self.get_recommendations(
             session,
             user_id,
             n=n,
+            exclude_already_rated=exclude_already_rated,
             force_refresh=True
         )
     

@@ -13,6 +13,7 @@ class RecommendationItem(BaseModel):
     release_year: int | None
     genres: str
     score: float
+    user_rating: float | None = None
 
 
 class RecommendationResponse(BaseModel):
