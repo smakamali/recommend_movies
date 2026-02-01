@@ -83,7 +83,7 @@ def train_model(
         print("Step 1: Loading data from database")
         print("-"*60)
     
-    data = load_training_data(db_path=db_path, test_size=0.2, random_state=42)
+    data = load_training_data(db_path=db_path, test_size=0.1, random_state=42)
     trainset = data['trainset']
     testset = data['testset']
     user_features_df = data['user_features_df']
