@@ -19,20 +19,10 @@ Complete guide for the database layer of the GraphSAGE recommender system built 
 
 ## Quick Start
 
-### Setup and Import (5 minutes)
+See [README.md](README.md) for environment setup. To import data and verify:
 
 ```bash
-# 1. Create environment
-conda create -n recommender python=3.10 -y
-conda activate recommender
-
-# 2. Install dependencies
-pip install -r requirements.txt
-
-# 3. Import data
 python scripts/init_database.py --reset
-
-# 4. Verify
 python scripts/verify_database.py
 ```
 
@@ -120,40 +110,13 @@ CREATE INDEX idx_ratings_timestamp ON ratings(created_at);
 
 ## Installation
 
-### Prerequisites
-
-- Python 3.10
-- conda (recommended) or pip
-- 50 MB disk space for database
-- MovieLens 100K dataset (auto-downloaded)
-
-### Environment Setup
-
-#### Option 1: Conda (Recommended)
-
-```bash
-# Create environment from spec
-conda env create -f environment.yml
-conda activate recommender
-```
-
-#### Option 2: Pip
-
-```bash
-# Create virtual environment
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-
-# Install dependencies
-pip install -r requirements.txt
-```
+See [README.md](README.md) for full setup. Prerequisites: Python 3.10, ~50 MB disk space. MovieLens 100K is auto-downloaded on first import.
 
 ### Dependencies
 
 - **SQLAlchemy** 2.0+ - ORM and database toolkit
 - **pandas** 2.0+ - Data manipulation
-- **numpy** 1.26 - Numerical computing (downgraded for compatibility)
-- **scikit-surprise** 1.1.3 - MovieLens dataset loader
+- **numpy** - Numerical computing
 - **pytest** 9.0+ - Testing framework
 
 ---
@@ -439,14 +402,15 @@ python scripts/init_database.py --reset --data-path /path/to/ml-100k
 python scripts/init_database.py --reset
 ```
 
-### NumPy Version Conflict
+### Import Errors
 
-**Symptom:** `ImportError` with surprise library
+**Symptom:** Module not found or compatibility errors.
 
-**Solution:** Downgrade NumPy:
+**Solution:** Ensure conda environment is activated and dependencies are installed:
 
 ```bash
-pip install "numpy<2.0"
+conda activate recommender
+pip install -r requirements.txt
 ```
 
 ### Foreign Key Violations

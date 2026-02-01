@@ -24,6 +24,12 @@ python scripts/init_database.py --reset
 python scripts/train_model.py
 ```
 
+### Run Tests
+
+```bash
+python -m pytest tests/ -v
+```
+
 ### Run API
 
 ```bash
@@ -90,4 +96,18 @@ See `.env.example`:
 - `GET /api/health` – Health check
 - `GET /api/model/info` – Model metadata  
 
-See `ARCHITECTURE_MVP.md` for full specification.
+## Training Options
+
+```bash
+python scripts/train_model.py --epochs 30          # Custom epochs
+python scripts/train_model.py --hidden-dim 128    # Larger model
+python scripts/train_model.py --device cpu        # CPU training
+python scripts/train_model.py --quiet             # Suppress output
+```
+
+Artifacts: `models/current/graphsage_model.pth`, `preprocessor.pkl`, `metadata.json`
+
+## Documentation
+
+- **ARCHITECTURE_MVP.md** – Full specification (schema, endpoints, data flows)
+- **DATABASE_GUIDE.md** – Database CRUD reference, scripts, troubleshooting

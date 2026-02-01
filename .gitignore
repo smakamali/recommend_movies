@@ -57,7 +57,9 @@ logs/
 
 # Local data (optional: uncomment if DB and artifacts should not be committed)
 data/
-models/
+
+# Model artifacts at project root (excludes app/api/models which contains API schemas)
+/models/
 
 # MCP / Cursor (optional)
 .cursor/
