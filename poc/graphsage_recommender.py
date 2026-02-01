@@ -7,6 +7,7 @@ Implements fit() and test() methods compatible with evaluation.py.
 
 import torch
 import numpy as np
+from sklearn.preprocessing import MinMaxScaler
 from poc.trainset import Prediction
 
 # Handle both relative imports (when used as module) and absolute imports (when run as script)
@@ -90,6 +91,7 @@ class GraphSAGERecommenderWrapper:
         self.idx_to_user_id = None
         self.idx_to_item_id = None
         self.trainset = None
+        self.rating_scaler = None
         self.user_embeddings = None
         self.item_embeddings = None
         
@@ -115,6 +117,11 @@ class GraphSAGERecommenderWrapper:
         self.idx_to_item_id = {idx: iid for iid, idx in self.item_id_to_idx.items()}
         
         self.trainset = trainset
+        
+        # Fit rating scaler on training ratings (1-5 -> 0-1)
+        train_ratings = np.array([r for (_, _, r) in trainset.all_ratings()]).reshape(-1, 1)
+        self.rating_scaler = MinMaxScaler(feature_range=(0, 1))
+        self.rating_scaler.fit(train_ratings)
         
         # Get feature dimensions
         user_feat_dim = self.graph_data.x[self.graph_data.node_type == 0].size(1)
@@ -145,6 +152,7 @@ class GraphSAGERecommenderWrapper:
             trainset,
             self.user_id_to_idx,
             self.item_id_to_idx,
+            self.rating_scaler,
             num_epochs=self.num_epochs,
             batch_size=self.batch_size,
             learning_rate=self.learning_rate,
@@ -176,7 +184,7 @@ class GraphSAGERecommenderWrapper:
             item_id: Item ID (string)
             
         Returns:
-            float: Predicted rating (clipped to [1, 5])
+            float: Predicted rating in [1, 5]
         """
         if self.model is None:
             raise ValueError("Model must be fitted before prediction")
@@ -186,13 +194,12 @@ class GraphSAGERecommenderWrapper:
         item_idx = self.item_id_to_idx.get(str(item_id))
         
         if user_idx is None or item_idx is None:
-            # Cold start: return average rating (3.0) or use feature-based prediction
-            # For now, return neutral rating
+            # Cold start: return average rating (3.0)
             return 3.0
         
-        # Compute prediction with rating head
+        # Compute prediction with rating head (outputs 0-1)
         with torch.no_grad():
-            score = self.model.predict(
+            pred_scaled = self.model.predict(
                 self.user_embeddings, 
                 self.item_embeddings,
                 user_idx, 
@@ -200,9 +207,11 @@ class GraphSAGERecommenderWrapper:
                 use_rating_head=True
             ).item()
         
-        # Already clamped in model, but ensure valid range
-        score = max(1.0, min(5.0, score))
-        return float(score)
+        # Inverse transform to rating scale 1-5
+        pred_rating = float(
+            self.rating_scaler.inverse_transform([[pred_scaled]])[0, 0]
+        )
+        return pred_rating
     
     def test(self, testset):
         """

@@ -280,6 +280,19 @@ def load_item_features():
     return item_df
 
 
+def _get_schema_superset():
+    """
+    Load occupation and gender superset from MovieLens 100K u.user.
+    Used to fit encoders on full schema so API-created users work at inference.
+    Returns (occupations, genders) or (None, None) if u.user not available.
+    """
+    try:
+        schema_df = load_user_features()
+        return schema_df['occupation'].unique(), schema_df['gender'].unique()
+    except (FileNotFoundError, OSError, Exception):
+        return None, None
+
+
 class FeaturePreprocessor:
     """
     Preprocess and normalize user/item features for Factorization Machines.
@@ -312,9 +325,15 @@ class FeaturePreprocessor:
         # Fit year scaler (use .values to avoid feature name warnings)
         self.year_scaler.fit(item_df[['release_year']].values)
         
-        # Fit encoders
-        self.occupation_encoder.fit(user_df['occupation'])
-        self.gender_encoder.fit(user_df['gender'])
+        # Fit encoders on superset of training data + schema from MovieLens u.user.
+        # Ensures API-created users with any valid occupation/gender work at inference.
+        occ_train = user_df['occupation'].unique()
+        gen_train = user_df['gender'].unique()
+        occ_schema, gen_schema = _get_schema_superset()
+        occ_all = np.union1d(occ_train, occ_schema) if occ_schema is not None else occ_train
+        gen_all = np.union1d(gen_train, gen_schema) if gen_schema is not None else gen_train
+        self.occupation_encoder.fit(occ_all)
+        self.gender_encoder.fit(gen_all)
         
         # Create feature index mappings
         # User IDs: indices 0 to n_users-1

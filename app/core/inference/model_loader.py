@@ -55,21 +55,22 @@ class ModelLoader:
         self._model: Optional[GraphSAGERecommender] = None
         self._preprocessor: Optional[FeaturePreprocessor] = None
         self._metadata: Optional[Dict[str, Any]] = None
+        self._rating_scaler: Optional[Any] = None
         
         logger.info(f"ModelLoader initialized with device: {self.device}")
     
     def load_model(
         self,
         force_reload: bool = False
-    ) -> Tuple[GraphSAGERecommender, FeaturePreprocessor, Dict[str, Any]]:
+    ) -> Tuple[GraphSAGERecommender, FeaturePreprocessor, Dict[str, Any], Any]:
         """
-        Load model, preprocessor, and metadata.
+        Load model, preprocessor, metadata, and rating scaler.
         
         Args:
             force_reload: Force reload from disk even if cached (default: False)
             
         Returns:
-            Tuple of (model, preprocessor, metadata)
+            Tuple of (model, preprocessor, metadata, rating_scaler)
             
         Raises:
             FileNotFoundError: If model artifacts not found
@@ -78,7 +79,7 @@ class ModelLoader:
         # Return cached if available and not forcing reload
         if not force_reload and self._model is not None:
             logger.info("Using cached model")
-            return self._model, self._preprocessor, self._metadata
+            return self._model, self._preprocessor, self._metadata, self._rating_scaler
         
         logger.info(f"Loading model from {self.model_dir}")
         
@@ -88,6 +89,9 @@ class ModelLoader:
         # Load preprocessor
         preprocessor = self._load_preprocessor()
         
+        # Load rating scaler
+        rating_scaler = self._load_rating_scaler()
+        
         # Load model with configuration from metadata
         model = self._load_model_weights(metadata, preprocessor)
         
@@ -95,6 +99,7 @@ class ModelLoader:
         self._model = model
         self._preprocessor = preprocessor
         self._metadata = metadata
+        self._rating_scaler = rating_scaler
         
         logger.info("Model loaded successfully")
         logger.info(f"  Model version: {metadata.get('model_version', 'unknown')}")
@@ -102,7 +107,23 @@ class ModelLoader:
         logger.info(f"  Num layers: {metadata.get('num_layers', 'unknown')}")
         logger.info(f"  Val RMSE: {metadata.get('val_rmse', 'unknown')}")
         
-        return model, preprocessor, metadata
+        return model, preprocessor, metadata, rating_scaler
+    
+    def _load_rating_scaler(self) -> Any:
+        """Load fitted rating scaler from pickle file."""
+        scaler_path = self.model_dir / "rating_scaler.pkl"
+        
+        if not scaler_path.exists():
+            raise FileNotFoundError(
+                f"Rating scaler file not found: {scaler_path}\n"
+                "Please ensure the model has been trained and saved with the current pipeline."
+            )
+        
+        with open(scaler_path, 'rb') as f:
+            rating_scaler = pickle.load(f)
+        
+        logger.debug("Loaded rating scaler")
+        return rating_scaler
     
     def _load_metadata(self) -> Dict[str, Any]:
         """Load model metadata from JSON file."""
@@ -234,10 +255,11 @@ class ModelLoader:
         }
     
     def clear_cache(self):
-        """Clear cached model and preprocessor."""
+        """Clear cached model, preprocessor, and rating scaler."""
         self._model = None
         self._preprocessor = None
         self._metadata = None
+        self._rating_scaler = None
         logger.info("Model cache cleared")
 
 
@@ -250,7 +272,7 @@ if __name__ == "__main__":
     
     try:
         loader = ModelLoader(model_dir="models/current")
-        model, preprocessor, metadata = loader.load_model()
+        model, preprocessor, metadata, rating_scaler = loader.load_model()
         
         print("\nModel loaded successfully!")
         print(f"Model info: {loader.get_model_info()}")

@@ -21,6 +21,9 @@ Author: Agent 1 - GraphSAGE Recommender System
 import os
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
+import warnings
+warnings.filterwarnings("ignore", message=".*torch-scatter.*")
+
 import sys
 import argparse
 from pathlib import Path
@@ -258,6 +261,7 @@ Examples:
         print(f"\nArtifacts saved to: {args.output_dir}")
         print(f"  - graphsage_model.pth")
         print(f"  - preprocessor.pkl")
+        print(f"  - rating_scaler.pkl")
         print(f"  - metadata.json")
         
         print("\n" + "="*60)

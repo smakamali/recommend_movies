@@ -9,8 +9,10 @@ import json
 import pickle
 import torch
 import sys
+import numpy as np
 from pathlib import Path
 from datetime import datetime
+from sklearn.preprocessing import MinMaxScaler
 
 # Add parent directory to path to import from poc
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -46,6 +48,14 @@ def create_mock_model_artifacts(output_dir: str = "models/current"):
     with open(preprocessor_path, 'wb') as f:
         pickle.dump(preprocessor, f)
     print(f"    Saved: {preprocessor_path}")
+    
+    # Create and save rating scaler (ratings 1-5 -> 0-1)
+    rating_scaler = MinMaxScaler(feature_range=(0, 1))
+    rating_scaler.fit(np.array([[1.0], [5.0]]))  # Min-max range for MovieLens
+    scaler_path = output_path / "rating_scaler.pkl"
+    with open(scaler_path, 'wb') as f:
+        pickle.dump(rating_scaler, f)
+    print(f"    Saved: {scaler_path}")
     
     # Get feature dimensions
     n_genders = len(preprocessor.gender_encoder.classes_)
@@ -97,8 +107,15 @@ def create_mock_model_artifacts(output_dir: str = "models/current"):
         "val_rmse": None,  # Not trained
         "val_precision@10": None,  # Not trained
         "hyperparameters": {
-            "learning_rate": 0.001,
+            "num_users": num_users,
+            "num_items": num_items,
+            "user_feat_dim": user_feat_dim,
+            "item_feat_dim": item_feat_dim,
+            "hidden_dim": hidden_dim,
+            "num_layers": num_layers,
             "dropout": dropout,
+            "aggregator": aggregator,
+            "learning_rate": 0.001,
             "batch_size": 512,
             "num_epochs": 0
         },
@@ -117,6 +134,7 @@ def create_mock_model_artifacts(output_dir: str = "models/current"):
     return {
         "model_path": str(model_path),
         "preprocessor_path": str(preprocessor_path),
+        "rating_scaler_path": str(scaler_path),
         "metadata_path": str(metadata_path)
     }
 

@@ -68,12 +68,13 @@ class GraphSAGERecommender(nn.Module):
                     SAGEConv(hidden_dim, hidden_dim, aggr=aggregator)
                 )
         
-        # Rating prediction head: maps dot product to rating scale [1, 5]
+        # Rating prediction head: maps dot product to [0, 1] via sigmoid (inverse transform at inference)
         self.rating_head = nn.Sequential(
             nn.Linear(1, 16),
             nn.ReLU(),
             nn.Dropout(0.1),
-            nn.Linear(16, 1)
+            nn.Linear(16, 1),
+            nn.Sigmoid()
         )
         
         # Initialize weights
@@ -170,9 +171,8 @@ class GraphSAGERecommender(nn.Module):
         scores = (user_emb_selected * item_emb_selected).sum(dim=1, keepdim=True)
         
         if use_rating_head and hasattr(self, 'rating_head'):
-            # Use learned mapping to [1, 5]
+            # Use learned mapping to [0, 1] (inverse transform to 1-5 at inference)
             scores = self.rating_head(scores).squeeze(-1)
-            scores = torch.clamp(scores, 1.0, 5.0)
         else:
             # Fallback: simple clipping (for BPR-only mode)
             scores = scores.squeeze(-1)

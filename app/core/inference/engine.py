@@ -89,13 +89,13 @@ class InferenceEngine:
         self.model_loader = ModelLoader(model_dir=self.model_dir, device=self.device)
         
         # Load model artifacts
-        self.model, self.preprocessor, self.metadata = self.model_loader.load_model(force_reload)
+        self.model, self.preprocessor, self.metadata, rating_scaler = self.model_loader.load_model(force_reload)
         
         # Initialize feature processor
         self.feature_processor = FeatureProcessor(self.preprocessor)
         
         # Initialize recommender
-        self.recommender = Recommender(self.model, device=self.device)
+        self.recommender = Recommender(self.model, rating_scaler, device=self.device)
         
         model_info = self.model_loader.get_model_info()
         logger.info(f"Model loaded: version {model_info.get('version', 'unknown')}")

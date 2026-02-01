@@ -67,16 +67,16 @@ class RatingMSELoss(nn.Module):
     """
     MSE loss for rating prediction.
     
-    Predicts actual rating values in the range [1, 5] and optimizes
-    for rating reconstruction accuracy using mean squared error.
+    With scaled labels, predicts values in [0, 1] (sigmoid output) and optimizes
+    for rating reconstruction using mean squared error.
     """
     
-    def __init__(self, rating_range=(1.0, 5.0)):
+    def __init__(self, rating_range=(0.0, 1.0)):
         """
         Initialize rating MSE loss.
         
         Args:
-            rating_range: Tuple of (min_rating, max_rating) (default: (1.0, 5.0))
+            rating_range: Tuple of (min_rating, max_rating) (default: (0.0, 1.0) for scaled labels)
         """
         super(RatingMSELoss, self).__init__()
         self.min_rating = rating_range[0]
@@ -118,7 +118,7 @@ class CombinedLoss(nn.Module):
             reg_lambda: L2 regularization parameter (default: 0.01)
         """
         super(CombinedLoss, self).__init__()
-        self.mse_loss = RatingMSELoss()
+        self.mse_loss = RatingMSELoss(rating_range=(0.0, 1.0))
         self.bpr_loss = BPRLoss(reg_lambda=reg_lambda)
         self.mse_weight = mse_weight
         self.bpr_weight = bpr_weight
@@ -151,6 +151,7 @@ class CombinedLoss(nn.Module):
 
 
 def train_graphsage_model(model, graph_data, trainset, user_id_to_idx, item_id_to_idx,
+                          rating_scaler,
                           num_epochs=20, batch_size=512, learning_rate=0.001,
                           num_negatives=1, device='cpu', verbose=True,
                           loss_type='mse', mse_weight=1.0, bpr_weight=0.1,
@@ -164,6 +165,7 @@ def train_graphsage_model(model, graph_data, trainset, user_id_to_idx, item_id_t
         trainset: Surprise Trainset
         user_id_to_idx: Dict mapping user_id -> node index
         item_id_to_idx: Dict mapping item_id -> node index
+        rating_scaler: Fitted MinMaxScaler to transform ratings from [1,5] to [0,1]
         num_epochs: Number of training epochs (default: 20)
         batch_size: Batch size for training (default: 512)
         learning_rate: Learning rate (default: 0.001)
@@ -219,7 +221,7 @@ def train_graphsage_model(model, graph_data, trainset, user_id_to_idx, item_id_t
     if loss_type == 'bpr':
         criterion = BPRLoss(reg_lambda=0.01)
     elif loss_type == 'mse':
-        criterion = RatingMSELoss()
+        criterion = RatingMSELoss(rating_range=(0.0, 1.0))
     elif loss_type == 'combined':
         criterion = CombinedLoss(mse_weight=mse_weight, bpr_weight=bpr_weight, reg_lambda=0.01)
     else:
@@ -277,7 +279,9 @@ def train_graphsage_model(model, graph_data, trainset, user_id_to_idx, item_id_t
                 user_idx, item_idx, rating = train_pairs[idx]
                 batch_users.append(user_idx)
                 batch_items.append(item_idx)
-                batch_ratings.append(rating)
+                batch_ratings.append(
+                    float(rating_scaler.transform([[rating]])[0, 0])
+                )
                 
                 # Sample negative items (for BPR/combined loss)
                 if loss_type in ['bpr', 'combined']:
@@ -382,7 +386,9 @@ def train_graphsage_model(model, graph_data, trainset, user_id_to_idx, item_id_t
                 for user_idx, item_idx, rating in val_batch:
                     val_users.append(user_idx)
                     val_items.append(item_idx)
-                    val_ratings.append(rating)
+                    val_ratings.append(
+                        float(rating_scaler.transform([[rating]])[0, 0])
+                    )
                     
                     # Sample negative items for BPR/combined loss
                     if loss_type in ['bpr', 'combined']:
@@ -484,9 +490,10 @@ if __name__ == "__main__":
     # Test training
     import sys
     from pathlib import Path
+    from sklearn.preprocessing import MinMaxScaler
     sys.path.insert(0, str(Path(__file__).parent.parent))
-    from gnn.graph_data_loader import build_bipartite_graph
-    from gnn.graphsage_model import GraphSAGERecommender
+    from poc.graph_data_loader import build_bipartite_graph
+    from poc.graphsage_model import GraphSAGERecommender
     from poc.data_loader import (load_movielens_100k, get_train_test_split,
                                 load_user_features, load_item_features)
     
@@ -500,6 +507,11 @@ if __name__ == "__main__":
     graph_data, preprocessor, user_id_to_idx, item_id_to_idx = build_bipartite_graph(
         trainset, user_features, item_features
     )
+    
+    # Fit rating scaler
+    train_ratings = np.array([r for (_, _, r) in trainset.all_ratings()]).reshape(-1, 1)
+    rating_scaler = MinMaxScaler(feature_range=(0, 1))
+    rating_scaler.fit(train_ratings)
     
     print("Initializing model...")
     user_feat_dim = graph_data.x[graph_data.node_type == 0].size(1)
@@ -517,6 +529,7 @@ if __name__ == "__main__":
     print("Training model with early stopping (max 50 epochs)...")
     history = train_graphsage_model(
         model, graph_data, trainset, user_id_to_idx, item_id_to_idx,
+        rating_scaler,
         num_epochs=50, batch_size=256, learning_rate=0.001,
         device='cuda', verbose=True,
         val_ratio=0.10, early_stopping_patience=5, early_stopping_min_delta=1e-4

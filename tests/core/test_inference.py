@@ -40,14 +40,14 @@ def model_loader():
 @pytest.fixture
 def loaded_artifacts(model_loader):
     """Load model artifacts."""
-    model, preprocessor, metadata = model_loader.load_model()
-    return model, preprocessor, metadata
+    model, preprocessor, metadata, rating_scaler = model_loader.load_model()
+    return model, preprocessor, metadata, rating_scaler
 
 
 @pytest.fixture
 def feature_processor(loaded_artifacts):
     """Create feature processor."""
-    _, preprocessor, _ = loaded_artifacts
+    _, preprocessor, _, _ = loaded_artifacts
     return FeatureProcessor(preprocessor)
 
 
@@ -66,8 +66,8 @@ def built_graph(graph_manager, session):
 @pytest.fixture
 def recommender(loaded_artifacts):
     """Create recommender."""
-    model, _, _ = loaded_artifacts
-    return Recommender(model)
+    model, _, _, rating_scaler = loaded_artifacts
+    return Recommender(model, rating_scaler)
 
 
 class TestModelLoader:
@@ -81,11 +81,12 @@ class TestModelLoader:
     
     def test_load_model(self, model_loader):
         """Test loading model artifacts."""
-        model, preprocessor, metadata = model_loader.load_model()
+        model, preprocessor, metadata, rating_scaler = model_loader.load_model()
         
         assert model is not None
         assert preprocessor is not None
         assert metadata is not None
+        assert rating_scaler is not None
         
         # Check model is in eval mode
         assert not model.training
@@ -102,10 +103,10 @@ class TestModelLoader:
     def test_cache(self, model_loader):
         """Test that model is cached after first load."""
         # First load
-        model1, _, _ = model_loader.load_model()
+        model1, _, _, _ = model_loader.load_model()
         
         # Second load (should be cached)
-        model2, _, _ = model_loader.load_model()
+        model2, _, _, _ = model_loader.load_model()
         
         # Should be same object
         assert model1 is model2

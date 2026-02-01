@@ -9,6 +9,7 @@ import torch
 import numpy as np
 from pathlib import Path
 from typing import Dict, Any, Tuple
+from sklearn.preprocessing import MinMaxScaler
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
@@ -126,6 +127,11 @@ def train_model(
     user_feat_dim = feat_dim
     item_feat_dim = feat_dim
     
+    # Fit rating scaler on training ratings (1-5 -> 0-1)
+    train_ratings = np.array([r for (_, _, r) in trainset.all_ratings()]).reshape(-1, 1)
+    rating_scaler = MinMaxScaler(feature_range=(0, 1))
+    rating_scaler.fit(train_ratings)
+    
     if verbose:
         print(f"\nGraph constructed:")
         print(f"  User nodes: {graph_data.num_users}")
@@ -178,6 +184,7 @@ def train_model(
         trainset=trainset,
         user_id_to_idx=user_id_map,
         item_id_to_idx=item_id_map,
+        rating_scaler=rating_scaler,
         loss_type=loss_type,
         num_epochs=num_epochs,
         batch_size=batch_size,
@@ -212,15 +219,18 @@ def train_model(
             user_idx = user_id_map[uid]
             item_idx = item_id_map[iid]
             
-            # Get prediction using precomputed embeddings
-            pred_rating = trained_model.predict(
+            # Get prediction using precomputed embeddings (model outputs 0-1)
+            pred_scaled = trained_model.predict(
                 user_emb,
                 item_emb,
                 user_idx,
                 item_idx
             )
-            
-            predictions.append((uid, iid, true_rating, pred_rating.item()))
+            # Inverse transform to rating scale 1-5
+            pred_rating = float(
+                rating_scaler.inverse_transform([[pred_scaled.item()]])[0, 0]
+            )
+            predictions.append((uid, iid, true_rating, pred_rating))
     
     # Evaluate predictions
     test_metrics = evaluate_model(predictions, k=10, threshold=4.0, verbose=verbose)
@@ -291,6 +301,7 @@ def train_model(
         model=trained_model,
         preprocessor=preprocessor,
         metadata=metadata,
+        rating_scaler=rating_scaler,
         output_dir=output_dir
     )
     

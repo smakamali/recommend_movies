@@ -34,7 +34,7 @@ def test_model_loading():
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     
     try:
-        model, preprocessor, metadata = load_model_artifacts(
+        model, preprocessor, metadata, rating_scaler = load_model_artifacts(
             GraphSAGERecommender,
             model_dir='models/current',
             device=device
@@ -59,14 +59,15 @@ def test_model_loading():
         
         print(f"\nPerformance:")
         met = metadata.get('metrics', {})
-        print(f"  Test RMSE: {met.get('val_rmse'):.4f}")
-        print(f"  Test MAE: {met.get('val_mae'):.4f}")
-        print(f"  Precision@10: {met.get('val_precision_10'):.4f}")
-        print(f"  Recall@10: {met.get('val_recall_10'):.4f}")
+        _fmt = lambda x: f"{x:.4f}" if x is not None else "N/A"
+        print(f"  Test RMSE: {_fmt(met.get('val_rmse'))}")
+        print(f"  Test MAE: {_fmt(met.get('val_mae'))}")
+        print(f"  Precision@10: {_fmt(met.get('val_precision_10'))}")
+        print(f"  Recall@10: {_fmt(met.get('val_recall_10'))}")
         
         print(f"\nTraining:")
-        print(f"  Epochs: {met.get('epochs_trained')}")
-        print(f"  Best val loss: {met.get('best_val_loss'):.4f}")
+        print(f"  Epochs: {met.get('epochs_trained', 'N/A')}")
+        print(f"  Best val loss: {_fmt(met.get('best_val_loss'))}")
         
         # Test model mode
         print("\nStep 4: Testing model state...")

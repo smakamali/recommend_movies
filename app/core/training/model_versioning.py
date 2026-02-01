@@ -17,6 +17,7 @@ def save_model_artifacts(
     model: torch.nn.Module,
     preprocessor: Any,
     metadata: Dict[str, Any],
+    rating_scaler: Any,
     output_dir: str = "models/current"
 ) -> None:
     """
@@ -26,6 +27,7 @@ def save_model_artifacts(
         model: Trained PyTorch model
         preprocessor: Fitted FeaturePreprocessor
         metadata: Dictionary with training metadata
+        rating_scaler: Fitted MinMaxScaler for rating inverse transform at inference
         output_dir: Directory to save artifacts
     """
     # Create output directory
@@ -42,11 +44,18 @@ def save_model_artifacts(
         pickle.dump(preprocessor, f)
     print(f"Saved preprocessor to: {preprocessor_path}")
     
+    # Save rating scaler
+    scaler_path = os.path.join(output_dir, "rating_scaler.pkl")
+    with open(scaler_path, 'wb') as f:
+        pickle.dump(rating_scaler, f)
+    print(f"Saved rating scaler to: {scaler_path}")
+    
     # Add timestamp to metadata
     metadata['saved_at'] = datetime.now().isoformat()
     metadata['artifact_paths'] = {
         'model': model_path,
         'preprocessor': preprocessor_path,
+        'rating_scaler': scaler_path,
         'metadata': os.path.join(output_dir, "metadata.json")
     }
     
@@ -63,7 +72,7 @@ def load_model_artifacts(
     model_class: type,
     model_dir: str = "models/current",
     device: str = 'cpu'
-) -> Tuple[torch.nn.Module, Any, Dict[str, Any]]:
+) -> Tuple[torch.nn.Module, Any, Dict[str, Any], Any]:
     """
     Load trained model and associated artifacts.
     
@@ -73,7 +82,7 @@ def load_model_artifacts(
         device: Device to load model on ('cpu' or 'cuda')
         
     Returns:
-        Tuple of (model, preprocessor, metadata)
+        Tuple of (model, preprocessor, metadata, rating_scaler)
     """
     # Load metadata
     metadata_path = os.path.join(model_dir, "metadata.json")
@@ -84,6 +93,11 @@ def load_model_artifacts(
     preprocessor_path = os.path.join(model_dir, "preprocessor.pkl")
     with open(preprocessor_path, 'rb') as f:
         preprocessor = pickle.load(f)
+    
+    # Load rating scaler
+    scaler_path = os.path.join(model_dir, "rating_scaler.pkl")
+    with open(scaler_path, 'rb') as f:
+        rating_scaler = pickle.load(f)
     
     # Initialize model with saved hyperparameters
     hyperparams = metadata.get('hyperparameters', {})
@@ -113,7 +127,7 @@ def load_model_artifacts(
     print(f"  Training date: {metadata.get('training_date', 'unknown')}")
     print(f"  Val RMSE: {metadata.get('metrics', {}).get('val_rmse', 'N/A')}")
     
-    return model, preprocessor, metadata
+    return model, preprocessor, metadata, rating_scaler
 
 
 def get_latest_model_path() -> str:
@@ -179,6 +193,7 @@ def verify_artifacts_exist(model_dir: str = "models/current") -> bool:
     required_files = [
         "graphsage_model.pth",
         "preprocessor.pkl",
+        "rating_scaler.pkl",
         "metadata.json"
     ]
     

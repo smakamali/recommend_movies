@@ -32,6 +32,7 @@ class Recommender:
     def __init__(
         self,
         model: GraphSAGERecommender,
+        rating_scaler: Any,
         device: str = 'cpu'
     ):
         """
@@ -39,9 +40,11 @@ class Recommender:
         
         Args:
             model: Trained GraphSAGE model
+            rating_scaler: Fitted MinMaxScaler for inverse transform of predictions to 1-5
             device: Device to run inference on ('cpu' or 'cuda')
         """
         self.model = model
+        self.rating_scaler = rating_scaler
         self.device = device
         self.model.to(device)
         self.model.eval()
@@ -238,12 +241,16 @@ class Recommender:
             item_idx: Item node index
             
         Returns:
-            Predicted rating value
+            Predicted rating value in [1, 5]
         """
         with torch.no_grad():
-            score = self.model.predict(user_emb, item_emb, user_idx, item_idx, use_rating_head=True)
+            pred_scaled = self.model.predict(user_emb, item_emb, user_idx, item_idx, use_rating_head=True)
         
-        return float(score.item())
+        # Inverse transform from [0, 1] to [1, 5]
+        pred_rating = float(
+            self.rating_scaler.inverse_transform([[pred_scaled.item()]])[0, 0]
+        )
+        return pred_rating
     
     def batch_predict_ratings(
         self,
@@ -270,8 +277,11 @@ class Recommender:
         predictions = []
         with torch.no_grad():
             for user_idx, item_idx in zip(user_indices, item_indices):
-                score = self.model.predict(user_emb, item_emb, user_idx, item_idx, use_rating_head=True)
-                predictions.append(float(score.item()))
+                pred_scaled = self.model.predict(user_emb, item_emb, user_idx, item_idx, use_rating_head=True)
+                pred_rating = float(
+                    self.rating_scaler.inverse_transform([[pred_scaled.item()]])[0, 0]
+                )
+                predictions.append(pred_rating)
         
         return predictions
 
@@ -291,7 +301,7 @@ if __name__ == "__main__":
     try:
         # Load model
         loader = ModelLoader(model_dir="models/current")
-        model, preprocessor, metadata = loader.load_model()
+        model, preprocessor, metadata, rating_scaler = loader.load_model()
         
         # Build graph
         feature_processor = FeatureProcessor(preprocessor)
@@ -301,7 +311,7 @@ if __name__ == "__main__":
         graph_data = manager.build_graph_from_database(session)
         
         # Create recommender
-        recommender = Recommender(model)
+        recommender = Recommender(model, rating_scaler)
         
         # Generate embeddings
         user_emb, item_emb = recommender.generate_embeddings(graph_data)
