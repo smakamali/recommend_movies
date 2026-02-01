@@ -257,6 +257,8 @@ Examples:
         print(f"  Epochs trained: {metrics['epochs_trained']}")
         print(f"  Final train loss: {metrics['final_train_loss']:.4f}")
         print(f"  Best val loss: {metrics['best_val_loss']:.4f}")
+        print(f"  Train MAE (best epoch): {metrics.get('train_mae', 0):.4f}")
+        print(f"  Val MAE (best epoch): {metrics.get('val_mae_epoch', 0):.4f}")
         
         print(f"\nArtifacts saved to: {args.output_dir}")
         print(f"  - graphsage_model.pth")

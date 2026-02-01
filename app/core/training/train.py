@@ -235,10 +235,24 @@ def train_model(
     # Evaluate predictions
     test_metrics = evaluate_model(predictions, k=10, threshold=4.0, verbose=verbose)
     
+    # Best epoch index for reporting MAE at best model
+    best_epoch = training_history.get('best_epoch', 0)
+    train_mae_list = training_history.get('train_mae', [])
+    val_mae_list = training_history.get('val_mae', [])
+    if best_epoch and 1 <= best_epoch <= len(train_mae_list):
+        train_mae_at_best = train_mae_list[best_epoch - 1]
+        val_mae_at_best = val_mae_list[best_epoch - 1] if best_epoch <= len(val_mae_list) else (val_mae_list[-1] if val_mae_list else 0.0)
+    else:
+        train_mae_at_best = train_mae_list[-1] if train_mae_list else 0.0
+        val_mae_at_best = val_mae_list[-1] if val_mae_list else 0.0
+
     if verbose:
         print(f"\nTest metrics:")
         print(f"  RMSE: {test_metrics.get('rmse', 'N/A'):.4f}")
         print(f"  MAE: {test_metrics.get('mae', 'N/A'):.4f}")
+        print(f"\nTraining/validation MAE (at best epoch):")
+        print(f"  Train MAE: {train_mae_at_best:.4f}")
+        print(f"  Val MAE: {val_mae_at_best:.4f}")
         if 'precision@10' in test_metrics:
             print(f"  Precision@10: {test_metrics.get('precision@10', 'N/A'):.4f}")
         if 'recall@10' in test_metrics:
@@ -267,7 +281,7 @@ def train_model(
         'early_stopping_patience': early_stopping_patience
     }
     
-    # Prepare metrics for metadata
+    # Prepare metrics for metadata (val_* = test set; train_mae / val_mae_epoch = training run)
     metrics = {
         'val_rmse': test_metrics.get('rmse', 0.0),
         'val_mae': test_metrics.get('mae', 0.0),
@@ -275,6 +289,8 @@ def train_model(
         'val_recall_10': test_metrics.get('recall@10', 0.0),
         'final_train_loss': training_history['train_loss'][-1] if training_history['train_loss'] else 0.0,
         'best_val_loss': min(training_history['val_loss']) if training_history['val_loss'] else 0.0,
+        'train_mae': train_mae_at_best,
+        'val_mae_epoch': val_mae_at_best,
         'epochs_trained': len(training_history['train_loss'])
     }
     
@@ -289,7 +305,9 @@ def train_model(
         additional_info={
             'training_history': {
                 'train_loss': [float(x) for x in training_history['train_loss']],
-                'val_loss': [float(x) for x in training_history['val_loss']]
+                'val_loss': [float(x) for x in training_history['val_loss']],
+                'train_mae': [float(x) for x in training_history.get('train_mae', [])],
+                'val_mae': [float(x) for x in training_history.get('val_mae', [])]
             },
             'device': device,
             'database_path': db_path
@@ -310,7 +328,10 @@ def train_model(
         print("[SUCCESS] Training complete!")
         print("="*60)
         print(f"\nFinal metrics:")
+        print(f"  Train MAE (best epoch): {metrics['train_mae']:.4f}")
+        print(f"  Val MAE (best epoch): {metrics['val_mae_epoch']:.4f}")
         print(f"  Test RMSE: {metrics['val_rmse']:.4f}")
+        print(f"  Test MAE: {metrics['val_mae']:.4f}")
         print(f"  Test Precision@10: {metrics['val_precision_10']:.4f}")
         print(f"\nModel artifacts saved to: {output_dir}")
     

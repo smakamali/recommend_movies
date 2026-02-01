@@ -150,6 +150,31 @@ class CombinedLoss(nn.Module):
         return loss
 
 
+def _compute_mae(model, graph_data, pairs, rating_scaler, device, batch_size):
+    """
+    Compute MAE (1-5 scale) for a list of (user_idx, item_idx, true_rating) pairs.
+    true_rating is in original 1-5 scale.
+    """
+    if not pairs:
+        return 0.0
+    model.eval()
+    errors = []
+    with torch.no_grad():
+        user_emb, item_emb = model(graph_data)
+        for start in range(0, len(pairs), batch_size):
+            end = min(start + batch_size, len(pairs))
+            batch = pairs[start:end]
+            users = torch.tensor([p[0] for p in batch], dtype=torch.long, device=device)
+            items = torch.tensor([p[1] for p in batch], dtype=torch.long, device=device)
+            true_ratings = np.array([p[2] for p in batch], dtype=np.float64)  # 1-5
+            pred_scaled = model.predict(user_emb, item_emb, users, items, use_rating_head=True)
+            pred_1_5 = rating_scaler.inverse_transform(
+                pred_scaled.cpu().numpy().reshape(-1, 1)
+            ).flatten()
+            errors.extend(np.abs(true_ratings - pred_1_5))
+    return float(np.mean(errors))
+
+
 def train_graphsage_model(model, graph_data, trainset, user_id_to_idx, item_id_to_idx,
                           rating_scaler,
                           num_epochs=20, batch_size=512, learning_rate=0.001,
@@ -231,6 +256,8 @@ def train_graphsage_model(model, graph_data, trainset, user_id_to_idx, item_id_t
     history = {
         'train_loss': [],
         'val_loss': [],
+        'train_mae': [],
+        'val_mae': [],
         'epoch': []
     }
     
@@ -364,7 +391,11 @@ def train_graphsage_model(model, graph_data, trainset, user_id_to_idx, item_id_t
         history['train_loss'].append(avg_loss)
         history['epoch'].append(epoch + 1)
         
-        # Compute validation loss
+        # Compute training MAE (1-5 scale)
+        train_mae = _compute_mae(model, graph_data, train_pairs, rating_scaler, device, batch_size)
+        history['train_mae'].append(train_mae)
+        
+        # Compute validation loss and validation MAE
         model.eval()
         val_loss = 0.0
         val_batches = 0
@@ -453,6 +484,10 @@ def train_graphsage_model(model, graph_data, trainset, user_id_to_idx, item_id_t
         avg_val_loss = val_loss / val_batches if val_batches > 0 else 0.0
         history['val_loss'].append(avg_val_loss)
         
+        # Compute validation MAE (1-5 scale)
+        val_mae = _compute_mae(model, graph_data, val_pairs, rating_scaler, device, batch_size)
+        history['val_mae'].append(val_mae)
+        
         # Early stopping check
         if avg_val_loss < best_val_loss - early_stopping_min_delta:
             best_val_loss = avg_val_loss
@@ -461,11 +496,11 @@ def train_graphsage_model(model, graph_data, trainset, user_id_to_idx, item_id_t
             # Save best model state
             best_model_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
             if verbose:
-                print(f"Epoch {epoch+1}/{num_epochs}: Train Loss = {avg_loss:.4f}, Val Loss = {avg_val_loss:.4f} (BEST)")
+                print(f"Epoch {epoch+1}/{num_epochs}: Train Loss = {avg_loss:.4f}, Val Loss = {avg_val_loss:.4f} | Train MAE = {train_mae:.4f}, Val MAE = {val_mae:.4f} (BEST)")
         else:
             patience_counter += 1
             if verbose:
-                print(f"Epoch {epoch+1}/{num_epochs}: Train Loss = {avg_loss:.4f}, Val Loss = {avg_val_loss:.4f} (patience: {patience_counter}/{early_stopping_patience})")
+                print(f"Epoch {epoch+1}/{num_epochs}: Train Loss = {avg_loss:.4f}, Val Loss = {avg_val_loss:.4f} | Train MAE = {train_mae:.4f}, Val MAE = {val_mae:.4f} (patience: {patience_counter}/{early_stopping_patience})")
             
             # Check if early stopping should trigger
             if patience_counter >= early_stopping_patience:
@@ -479,6 +514,9 @@ def train_graphsage_model(model, graph_data, trainset, user_id_to_idx, item_id_t
         model.load_state_dict({k: v.to(device) for k, v in best_model_state.items()})
         if verbose:
             print(f"\nRestored model from epoch {best_epoch} with validation loss {best_val_loss:.4f}")
+    
+    # Record best epoch in history for downstream use
+    history['best_epoch'] = best_epoch
     
     if verbose:
         print("\nTraining completed!")
