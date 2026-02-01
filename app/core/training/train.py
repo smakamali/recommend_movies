@@ -83,7 +83,7 @@ def train_model(
         print("Step 1: Loading data from database")
         print("-"*60)
     
-    data = load_training_data(db_path=db_path, test_size=0.1, random_state=42)
+    data = load_training_data(db_path=db_path, test_size=0.2, random_state=42)
     trainset = data['trainset']
     testset = data['testset']
     user_features_df = data['user_features_df']
@@ -235,24 +235,31 @@ def train_model(
     # Evaluate predictions
     test_metrics = evaluate_model(predictions, k=10, threshold=4.0, verbose=verbose)
     
-    # Best epoch index for reporting MAE at best model
+    # Best epoch index for reporting MAE/MAPE at best model (before printing)
     best_epoch = training_history.get('best_epoch', 0)
     train_mae_list = training_history.get('train_mae', [])
     val_mae_list = training_history.get('val_mae', [])
+    train_mape_list = training_history.get('train_mape', [])
+    val_mape_list = training_history.get('val_mape', [])
     if best_epoch and 1 <= best_epoch <= len(train_mae_list):
         train_mae_at_best = train_mae_list[best_epoch - 1]
         val_mae_at_best = val_mae_list[best_epoch - 1] if best_epoch <= len(val_mae_list) else (val_mae_list[-1] if val_mae_list else 0.0)
+        train_mape_at_best = train_mape_list[best_epoch - 1] if best_epoch <= len(train_mape_list) else (train_mape_list[-1] if train_mape_list else 0.0)
+        val_mape_at_best = val_mape_list[best_epoch - 1] if best_epoch <= len(val_mape_list) else (val_mape_list[-1] if val_mape_list else 0.0)
     else:
         train_mae_at_best = train_mae_list[-1] if train_mae_list else 0.0
         val_mae_at_best = val_mae_list[-1] if val_mae_list else 0.0
-
+        train_mape_at_best = train_mape_list[-1] if train_mape_list else 0.0
+        val_mape_at_best = val_mape_list[-1] if val_mape_list else 0.0
+    
     if verbose:
         print(f"\nTest metrics:")
         print(f"  RMSE: {test_metrics.get('rmse', 'N/A'):.4f}")
         print(f"  MAE: {test_metrics.get('mae', 'N/A'):.4f}")
-        print(f"\nTraining/validation MAE (at best epoch):")
-        print(f"  Train MAE: {train_mae_at_best:.4f}")
-        print(f"  Val MAE: {val_mae_at_best:.4f}")
+        print(f"  MAPE: {test_metrics.get('mape', 0):.2f}%")
+        print(f"\nTraining/validation (at best epoch):")
+        print(f"  Train MAE: {train_mae_at_best:.4f}, Val MAE: {val_mae_at_best:.4f}")
+        print(f"  Train MAPE: {train_mape_at_best:.2f}%, Val MAPE: {val_mape_at_best:.2f}%")
         if 'precision@10' in test_metrics:
             print(f"  Precision@10: {test_metrics.get('precision@10', 'N/A'):.4f}")
         if 'recall@10' in test_metrics:
@@ -285,12 +292,15 @@ def train_model(
     metrics = {
         'val_rmse': test_metrics.get('rmse', 0.0),
         'val_mae': test_metrics.get('mae', 0.0),
+        'val_mape': test_metrics.get('mape', 0.0),
         'val_precision_10': test_metrics.get('precision@10', 0.0),
         'val_recall_10': test_metrics.get('recall@10', 0.0),
         'final_train_loss': training_history['train_loss'][-1] if training_history['train_loss'] else 0.0,
         'best_val_loss': min(training_history['val_loss']) if training_history['val_loss'] else 0.0,
         'train_mae': train_mae_at_best,
         'val_mae_epoch': val_mae_at_best,
+        'train_mape': train_mape_at_best,
+        'val_mape_epoch': val_mape_at_best,
         'epochs_trained': len(training_history['train_loss'])
     }
     
@@ -307,7 +317,9 @@ def train_model(
                 'train_loss': [float(x) for x in training_history['train_loss']],
                 'val_loss': [float(x) for x in training_history['val_loss']],
                 'train_mae': [float(x) for x in training_history.get('train_mae', [])],
-                'val_mae': [float(x) for x in training_history.get('val_mae', [])]
+                'val_mae': [float(x) for x in training_history.get('val_mae', [])],
+                'train_mape': [float(x) for x in training_history.get('train_mape', [])],
+                'val_mape': [float(x) for x in training_history.get('val_mape', [])]
             },
             'device': device,
             'database_path': db_path
@@ -328,10 +340,9 @@ def train_model(
         print("[SUCCESS] Training complete!")
         print("="*60)
         print(f"\nFinal metrics:")
-        print(f"  Train MAE (best epoch): {metrics['train_mae']:.4f}")
-        print(f"  Val MAE (best epoch): {metrics['val_mae_epoch']:.4f}")
-        print(f"  Test RMSE: {metrics['val_rmse']:.4f}")
-        print(f"  Test MAE: {metrics['val_mae']:.4f}")
+        print(f"  Train MAE (best epoch): {metrics['train_mae']:.4f}, Val MAE: {metrics['val_mae_epoch']:.4f}")
+        print(f"  Train MAPE (best epoch): {metrics['train_mape']:.2f}%, Val MAPE: {metrics['val_mape_epoch']:.2f}%")
+        print(f"  Test RMSE: {metrics['val_rmse']:.4f}, Test MAE: {metrics['val_mae']:.4f}, Test MAPE: {metrics['val_mape']:.2f}%")
         print(f"  Test Precision@10: {metrics['val_precision_10']:.4f}")
         print(f"\nModel artifacts saved to: {output_dir}")
     

@@ -4,30 +4,9 @@ User registration form component.
 
 import streamlit as st
 
-# MovieLens 100K occupation list
-OCCUPATIONS = [
-    "academic/educator",
-    "artist",
-    "clerical/admin",
-    "college/grad student",
-    "customer service",
-    "doctor/health care",
-    "executive/managerial",
-    "farmer",
-    "homemaker",
-    "K-12 student",
-    "lawyer",
-    "programmer",
-    "retired",
-    "sales/marketing",
-    "scientist",
-    "self-employed",
-    "technician/engineer",
-    "tradesman/craftsman",
-    "unemployed",
-    "writer",
-    "other",
-]
+from poc.data_loader import get_occupations_from_dataset
+
+OCCUPATIONS = get_occupations_from_dataset()
 
 
 def render_user_form() -> dict | None:

@@ -250,6 +250,7 @@ Examples:
         print(f"\nModel Performance:")
         print(f"  Test RMSE: {metrics['val_rmse']:.4f}")
         print(f"  Test MAE: {metrics['val_mae']:.4f}")
+        print(f"  Test MAPE: {metrics.get('val_mape', 0):.2f}%")
         print(f"  Test Precision@10: {metrics['val_precision_10']:.4f}")
         print(f"  Test Recall@10: {metrics['val_recall_10']:.4f}")
         
@@ -259,6 +260,8 @@ Examples:
         print(f"  Best val loss: {metrics['best_val_loss']:.4f}")
         print(f"  Train MAE (best epoch): {metrics.get('train_mae', 0):.4f}")
         print(f"  Val MAE (best epoch): {metrics.get('val_mae_epoch', 0):.4f}")
+        print(f"  Train MAPE (best epoch): {metrics.get('train_mape', 0):.2f}%")
+        print(f"  Val MAPE (best epoch): {metrics.get('val_mape_epoch', 0):.2f}%")
         
         print(f"\nArtifacts saved to: {args.output_dir}")
         print(f"  - graphsage_model.pth")

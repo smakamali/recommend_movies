@@ -150,133 +150,6 @@ class CombinedLoss(nn.Module):
         return loss
 
 
-def _sample_negatives_for_user(user_idx, user_positive_items, all_item_indices, num_negatives):
-    """
-    Sample negative item indices for one user (items not in user_positive_items[user_idx]).
-    Returns a list of length num_negatives; may include positives if sampling fails.
-    """
-    neg_samples = []
-    attempts = 0
-    while len(neg_samples) < num_negatives and attempts < 100:
-        neg_item_idx = np.random.choice(all_item_indices)
-        if neg_item_idx not in user_positive_items[user_idx]:
-            neg_samples.append(neg_item_idx)
-        attempts += 1
-    while len(neg_samples) < num_negatives:
-        neg_samples.append(np.random.choice(all_item_indices))
-    return neg_samples[:num_negatives]
-
-
-def _build_batch_from_pairs(pairs_slice, rating_scaler, user_positive_items,
-                            all_item_indices, num_negatives, loss_type, device):
-    """
-    Build batch tensors from a list of (user_idx, item_idx, rating) pairs.
-    Optionally samples negative items when loss_type is 'bpr' or 'combined'.
-
-    Returns:
-        users_t: (batch_size,) long
-        items_t: (batch_size,) long
-        ratings_t: (batch_size,) float, scaled to [0,1]
-        neg_items: list of length batch_size * num_negatives, or None if not needed
-    """
-    users = [p[0] for p in pairs_slice]
-    items = [p[1] for p in pairs_slice]
-    ratings = [float(rating_scaler.transform([[p[2]]])[0, 0]) for p in pairs_slice]
-
-    neg_items = None
-    if loss_type in ('bpr', 'combined'):
-        neg_items = []
-        for user_idx, _, _ in pairs_slice:
-            neg_items.extend(
-                _sample_negatives_for_user(
-                    user_idx, user_positive_items, all_item_indices, num_negatives
-                )
-            )
-
-    users_t = torch.tensor(users, dtype=torch.long, device=device)
-    items_t = torch.tensor(items, dtype=torch.long, device=device)
-    ratings_t = torch.tensor(ratings, dtype=torch.float32, device=device)
-    return users_t, items_t, ratings_t, neg_items
-
-
-def _compute_batch_loss(model, criterion, user_emb, item_emb,
-                        users_t, items_t, ratings_t, neg_items,
-                        loss_type, num_negatives, device):
-    """
-    Compute loss for one batch given precomputed embeddings and batch tensors.
-    """
-    if loss_type == 'mse':
-        pred_ratings = model.predict(
-            user_emb, item_emb, users_t, items_t, use_rating_head=True
-        )
-        return criterion(pred_ratings, ratings_t)
-
-    neg_items_t = torch.tensor(neg_items, dtype=torch.long, device=device)
-    if num_negatives > 1:
-        users_expanded = users_t.repeat_interleave(num_negatives)
-    else:
-        users_expanded = users_t
-
-    if loss_type == 'bpr':
-        pos_scores = model.predict(
-            user_emb, item_emb, users_t, items_t, use_rating_head=False
-        )
-        neg_scores = model.predict(
-            user_emb, item_emb, users_expanded, neg_items_t, use_rating_head=False
-        )
-        return criterion(pos_scores, neg_scores, model.parameters())
-
-    # combined
-    pred_ratings = model.predict(
-        user_emb, item_emb, users_t, items_t, use_rating_head=True
-    )
-    pos_scores = (user_emb[users_t] * item_emb[items_t]).sum(dim=1)
-    neg_scores = (user_emb[users_expanded] * item_emb[neg_items_t]).sum(dim=1)
-    return criterion(
-        pred_ratings, ratings_t, pos_scores, neg_scores, model.parameters()
-    )
-
-
-def _get_criterion(loss_type, mse_weight=1.0, bpr_weight=0.1):
-    """Return the appropriate loss module for the given loss_type."""
-    if loss_type == 'bpr':
-        return BPRLoss(reg_lambda=0.01)
-    if loss_type == 'mse':
-        return RatingMSELoss(rating_range=(0.0, 1.0))
-    if loss_type == 'combined':
-        return CombinedLoss(
-            mse_weight=mse_weight, bpr_weight=bpr_weight, reg_lambda=0.01
-        )
-    raise ValueError(
-        f"Invalid loss_type: {loss_type}. Must be 'mse', 'bpr', or 'combined'"
-    )
-
-
-def _prepare_training_data(trainset, user_id_to_idx, item_id_to_idx):
-    """
-    Build positive_pairs, user_positive_items, and item index list from trainset.
-    Only includes (user, item) pairs that exist in user_id_to_idx and item_id_to_idx.
-
-    Returns:
-        positive_pairs: list of (user_idx, item_idx, rating)
-        user_positive_items: dict user_idx -> set of item_idx
-        all_item_indices: list of item indices (for negative sampling)
-    """
-    positive_pairs = []
-    user_positive_items = defaultdict(set)
-    for inner_uid, inner_iid, rating in trainset.all_ratings():
-        uid = trainset.to_raw_uid(inner_uid)
-        iid = trainset.to_raw_iid(inner_iid)
-        if uid not in user_id_to_idx or iid not in item_id_to_idx:
-            continue
-        user_idx = user_id_to_idx[uid]
-        item_idx = item_id_to_idx[iid]
-        positive_pairs.append((user_idx, item_idx, rating))
-        user_positive_items[user_idx].add(item_idx)
-    all_item_indices = list(item_id_to_idx.values())
-    return positive_pairs, user_positive_items, all_item_indices
-
-
 def _compute_mae(model, graph_data, pairs, rating_scaler, device, batch_size):
     """
     Compute MAE (1-5 scale) for a list of (user_idx, item_idx, true_rating) pairs.
@@ -300,6 +173,32 @@ def _compute_mae(model, graph_data, pairs, rating_scaler, device, batch_size):
             ).flatten()
             errors.extend(np.abs(true_ratings - pred_1_5))
     return float(np.mean(errors))
+
+
+def _compute_mape(model, graph_data, pairs, rating_scaler, device, batch_size, epsilon=1e-10):
+    """
+    Compute MAPE in percent (1-5 scale) for a list of (user_idx, item_idx, true_rating) pairs.
+    MAPE = mean(|true - pred| / |true|) * 100.
+    """
+    if not pairs:
+        return 0.0
+    model.eval()
+    pct_errors = []
+    with torch.no_grad():
+        user_emb, item_emb = model(graph_data)
+        for start in range(0, len(pairs), batch_size):
+            end = min(start + batch_size, len(pairs))
+            batch = pairs[start:end]
+            users = torch.tensor([p[0] for p in batch], dtype=torch.long, device=device)
+            items = torch.tensor([p[1] for p in batch], dtype=torch.long, device=device)
+            true_ratings = np.array([p[2] for p in batch], dtype=np.float64)  # 1-5
+            pred_scaled = model.predict(user_emb, item_emb, users, items, use_rating_head=True)
+            pred_1_5 = rating_scaler.inverse_transform(
+                pred_scaled.cpu().numpy().reshape(-1, 1)
+            ).flatten()
+            denom = np.maximum(np.abs(true_ratings), epsilon)
+            pct_errors.extend(100.0 * np.abs(true_ratings - pred_1_5) / denom)
+    return float(np.mean(pct_errors))
 
 
 def train_graphsage_model(model, graph_data, trainset, user_id_to_idx, item_id_to_idx,
@@ -338,18 +237,46 @@ def train_graphsage_model(model, graph_data, trainset, user_id_to_idx, item_id_t
     model = model.to(device)
     graph_data = graph_data.to(device)
     
-    positive_pairs, user_positive_items, all_item_indices = _prepare_training_data(
-        trainset, user_id_to_idx, item_id_to_idx
-    )
-
+    # Build training data structures
+    positive_pairs = []
+    user_positive_items = defaultdict(set)
+    user_item_ratings = {}  # For MSE loss: (user_idx, item_idx) -> rating
+    
+    for inner_uid, inner_iid, rating in trainset.all_ratings():
+        uid = trainset.to_raw_uid(inner_uid)
+        iid = trainset.to_raw_iid(inner_iid)
+        
+        if uid not in user_id_to_idx or iid not in item_id_to_idx:
+            continue
+        
+        user_idx = user_id_to_idx[uid]
+        item_idx = item_id_to_idx[iid]
+        
+        positive_pairs.append((user_idx, item_idx, rating))
+        user_positive_items[user_idx].add(item_idx)
+        user_item_ratings[(user_idx, item_idx)] = rating
+    
+    # Split data into train and validation sets
     np.random.shuffle(positive_pairs)
     val_size = int(len(positive_pairs) * val_ratio)
     val_pairs = positive_pairs[:val_size]
     train_pairs = positive_pairs[val_size:]
     
+    # Get all item indices for negative sampling (used in BPR/combined modes)
+    all_item_indices = list(item_id_to_idx.values())
+    num_items = len(all_item_indices)
+    
     # Initialize optimizer and loss based on loss_type
     optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=1e-5)
-    criterion = _get_criterion(loss_type, mse_weight=mse_weight, bpr_weight=bpr_weight)
+    
+    if loss_type == 'bpr':
+        criterion = BPRLoss(reg_lambda=0.01)
+    elif loss_type == 'mse':
+        criterion = RatingMSELoss(rating_range=(0.0, 1.0))
+    elif loss_type == 'combined':
+        criterion = CombinedLoss(mse_weight=mse_weight, bpr_weight=bpr_weight, reg_lambda=0.01)
+    else:
+        raise ValueError(f"Invalid loss_type: {loss_type}. Must be 'mse', 'bpr', or 'combined'")
     
     # Training history
     history = {
@@ -357,6 +284,8 @@ def train_graphsage_model(model, graph_data, trainset, user_id_to_idx, item_id_t
         'val_loss': [],
         'train_mae': [],
         'val_mae': [],
+        'train_mape': [],
+        'val_mape': [],
         'epoch': []
     }
     
@@ -394,24 +323,95 @@ def train_graphsage_model(model, graph_data, trainset, user_id_to_idx, item_id_t
         for batch_start in range(0, len(train_pairs), batch_size):
             batch_end = min(batch_start + batch_size, len(train_pairs))
             batch_indices = indices[batch_start:batch_end]
-            batch_pairs = [train_pairs[i] for i in batch_indices]
-
-            users_t, items_t, ratings_t, neg_items = _build_batch_from_pairs(
-                batch_pairs, rating_scaler, user_positive_items,
-                all_item_indices, num_negatives, loss_type, device
-            )
-
+            
+            # Get batch data
+            batch_users = []
+            batch_items = []
+            batch_ratings = []
+            batch_neg_items = []
+            
+            for idx in batch_indices:
+                user_idx, item_idx, rating = train_pairs[idx]
+                batch_users.append(user_idx)
+                batch_items.append(item_idx)
+                batch_ratings.append(
+                    float(rating_scaler.transform([[rating]])[0, 0])
+                )
+                
+                # Sample negative items (for BPR/combined loss)
+                if loss_type in ['bpr', 'combined']:
+                    neg_samples = []
+                    attempts = 0
+                    while len(neg_samples) < num_negatives and attempts < 100:
+                        neg_item_idx = np.random.choice(all_item_indices)
+                        if neg_item_idx not in user_positive_items[user_idx]:
+                            neg_samples.append(neg_item_idx)
+                        attempts += 1
+                    
+                    # If couldn't find enough negatives, use random (may include positives)
+                    while len(neg_samples) < num_negatives:
+                        neg_samples.append(np.random.choice(all_item_indices))
+                    
+                    batch_neg_items.extend(neg_samples[:num_negatives])
+            
+            # Forward pass: get embeddings
             user_emb, item_emb = model(graph_data)
-            loss = _compute_batch_loss(
-                model, criterion, user_emb, item_emb,
-                users_t, items_t, ratings_t, neg_items,
-                loss_type, num_negatives, device
-            )
-
+            
+            # Convert to tensors
+            batch_users_tensor = torch.tensor(batch_users, dtype=torch.long, device=device)
+            batch_items_tensor = torch.tensor(batch_items, dtype=torch.long, device=device)
+            batch_ratings_tensor = torch.tensor(batch_ratings, dtype=torch.float32, device=device)
+            
+            # Compute loss based on loss_type
+            if loss_type == 'mse':
+                # MSE loss: predict ratings directly
+                pred_ratings = model.predict(user_emb, item_emb, batch_users_tensor, 
+                                            batch_items_tensor, use_rating_head=True)
+                loss = criterion(pred_ratings, batch_ratings_tensor)
+                
+            elif loss_type == 'bpr':
+                # BPR loss: ranking with negative sampling
+                batch_neg_items_tensor = torch.tensor(batch_neg_items, dtype=torch.long, device=device)
+                
+                # Expand users for multiple negatives
+                if num_negatives > 1:
+                    batch_users_expanded = batch_users_tensor.repeat_interleave(num_negatives)
+                else:
+                    batch_users_expanded = batch_users_tensor
+                
+                pos_scores = model.predict(user_emb, item_emb, batch_users_tensor, 
+                                          batch_items_tensor, use_rating_head=False)
+                neg_scores = model.predict(user_emb, item_emb, batch_users_expanded, 
+                                          batch_neg_items_tensor, use_rating_head=False)
+                loss = criterion(pos_scores, neg_scores, model.parameters())
+                
+            elif loss_type == 'combined':
+                # Combined loss: MSE for ratings + BPR for ranking
+                batch_neg_items_tensor = torch.tensor(batch_neg_items, dtype=torch.long, device=device)
+                
+                # Get predicted ratings (with rating head)
+                pred_ratings = model.predict(user_emb, item_emb, batch_users_tensor, 
+                                            batch_items_tensor, use_rating_head=True)
+                
+                # Get raw scores for BPR (without rating head)
+                pos_scores = (user_emb[batch_users_tensor] * item_emb[batch_items_tensor]).sum(dim=1)
+                
+                # Expand users for multiple negatives
+                if num_negatives > 1:
+                    batch_users_expanded = batch_users_tensor.repeat_interleave(num_negatives)
+                else:
+                    batch_users_expanded = batch_users_tensor
+                    
+                neg_scores = (user_emb[batch_users_expanded] * item_emb[batch_neg_items_tensor]).sum(dim=1)
+                
+                loss = criterion(pred_ratings, batch_ratings_tensor, pos_scores, 
+                               neg_scores, model.parameters())
+            
+            # Backward pass
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
-
+            
             total_loss += loss.item()
             num_batches += 1
         
@@ -419,39 +419,106 @@ def train_graphsage_model(model, graph_data, trainset, user_id_to_idx, item_id_t
         history['train_loss'].append(avg_loss)
         history['epoch'].append(epoch + 1)
         
-        # Compute training MAE (1-5 scale)
+        # Compute training MAE and MAPE (1-5 scale)
         train_mae = _compute_mae(model, graph_data, train_pairs, rating_scaler, device, batch_size)
+        train_mape = _compute_mape(model, graph_data, train_pairs, rating_scaler, device, batch_size)
         history['train_mae'].append(train_mae)
+        history['train_mape'].append(train_mape)
         
-        # Compute validation loss and validation MAE
+        # Compute validation loss, validation MAE and MAPE
         model.eval()
         val_loss = 0.0
         val_batches = 0
         
         with torch.no_grad():
+            # Forward pass for validation
             user_emb, item_emb = model(graph_data)
+            
+            # Process validation set in batches
             for val_start in range(0, len(val_pairs), batch_size):
                 val_end = min(val_start + batch_size, len(val_pairs))
                 val_batch = val_pairs[val_start:val_end]
-
-                users_t, items_t, ratings_t, neg_items = _build_batch_from_pairs(
-                    val_batch, rating_scaler, user_positive_items,
-                    all_item_indices, num_negatives, loss_type, device
-                )
-                batch_val_loss = _compute_batch_loss(
-                    model, criterion, user_emb, item_emb,
-                    users_t, items_t, ratings_t, neg_items,
-                    loss_type, num_negatives, device
-                )
+                
+                val_users = []
+                val_items = []
+                val_ratings = []
+                val_neg_items = []
+                
+                for user_idx, item_idx, rating in val_batch:
+                    val_users.append(user_idx)
+                    val_items.append(item_idx)
+                    val_ratings.append(
+                        float(rating_scaler.transform([[rating]])[0, 0])
+                    )
+                    
+                    # Sample negative items for BPR/combined loss
+                    if loss_type in ['bpr', 'combined']:
+                        neg_samples = []
+                        attempts = 0
+                        while len(neg_samples) < num_negatives and attempts < 100:
+                            neg_item_idx = np.random.choice(all_item_indices)
+                            if neg_item_idx not in user_positive_items[user_idx]:
+                                neg_samples.append(neg_item_idx)
+                            attempts += 1
+                        
+                        while len(neg_samples) < num_negatives:
+                            neg_samples.append(np.random.choice(all_item_indices))
+                        
+                        val_neg_items.extend(neg_samples[:num_negatives])
+                
+                # Convert to tensors
+                val_users_tensor = torch.tensor(val_users, dtype=torch.long, device=device)
+                val_items_tensor = torch.tensor(val_items, dtype=torch.long, device=device)
+                val_ratings_tensor = torch.tensor(val_ratings, dtype=torch.float32, device=device)
+                
+                # Compute validation loss based on loss_type
+                if loss_type == 'mse':
+                    pred_ratings = model.predict(user_emb, item_emb, val_users_tensor, 
+                                                val_items_tensor, use_rating_head=True)
+                    batch_val_loss = criterion(pred_ratings, val_ratings_tensor)
+                    
+                elif loss_type == 'bpr':
+                    val_neg_items_tensor = torch.tensor(val_neg_items, dtype=torch.long, device=device)
+                    
+                    if num_negatives > 1:
+                        val_users_expanded = val_users_tensor.repeat_interleave(num_negatives)
+                    else:
+                        val_users_expanded = val_users_tensor
+                    
+                    pos_scores = model.predict(user_emb, item_emb, val_users_tensor, 
+                                              val_items_tensor, use_rating_head=False)
+                    neg_scores = model.predict(user_emb, item_emb, val_users_expanded, 
+                                              val_neg_items_tensor, use_rating_head=False)
+                    batch_val_loss = criterion(pos_scores, neg_scores, model.parameters())
+                    
+                elif loss_type == 'combined':
+                    val_neg_items_tensor = torch.tensor(val_neg_items, dtype=torch.long, device=device)
+                    
+                    pred_ratings = model.predict(user_emb, item_emb, val_users_tensor, 
+                                                val_items_tensor, use_rating_head=True)
+                    pos_scores = (user_emb[val_users_tensor] * item_emb[val_items_tensor]).sum(dim=1)
+                    
+                    if num_negatives > 1:
+                        val_users_expanded = val_users_tensor.repeat_interleave(num_negatives)
+                    else:
+                        val_users_expanded = val_users_tensor
+                        
+                    neg_scores = (user_emb[val_users_expanded] * item_emb[val_neg_items_tensor]).sum(dim=1)
+                    
+                    batch_val_loss = criterion(pred_ratings, val_ratings_tensor, pos_scores, 
+                                             neg_scores, model.parameters())
+                
                 val_loss += batch_val_loss.item()
                 val_batches += 1
         
         avg_val_loss = val_loss / val_batches if val_batches > 0 else 0.0
         history['val_loss'].append(avg_val_loss)
         
-        # Compute validation MAE (1-5 scale)
+        # Compute validation MAE and MAPE (1-5 scale)
         val_mae = _compute_mae(model, graph_data, val_pairs, rating_scaler, device, batch_size)
+        val_mape = _compute_mape(model, graph_data, val_pairs, rating_scaler, device, batch_size)
         history['val_mae'].append(val_mae)
+        history['val_mape'].append(val_mape)
         
         # Early stopping check
         if avg_val_loss < best_val_loss - early_stopping_min_delta:
@@ -461,11 +528,11 @@ def train_graphsage_model(model, graph_data, trainset, user_id_to_idx, item_id_t
             # Save best model state
             best_model_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
             if verbose:
-                print(f"Epoch {epoch+1}/{num_epochs}: Train Loss = {avg_loss:.4f}, Val Loss = {avg_val_loss:.4f} | Train MAE = {train_mae:.4f}, Val MAE = {val_mae:.4f} (BEST)")
+                print(f"Epoch {epoch+1}/{num_epochs}: Train Loss = {avg_loss:.4f}, Val Loss = {avg_val_loss:.4f} | MAE T={train_mae:.4f}/V={val_mae:.4f} MAPE T={train_mape:.2f}%/V={val_mape:.2f}% (BEST)")
         else:
             patience_counter += 1
             if verbose:
-                print(f"Epoch {epoch+1}/{num_epochs}: Train Loss = {avg_loss:.4f}, Val Loss = {avg_val_loss:.4f} | Train MAE = {train_mae:.4f}, Val MAE = {val_mae:.4f} (patience: {patience_counter}/{early_stopping_patience})")
+                print(f"Epoch {epoch+1}/{num_epochs}: Train Loss = {avg_loss:.4f}, Val Loss = {avg_val_loss:.4f} | MAE T={train_mae:.4f}/V={val_mae:.4f} MAPE T={train_mape:.2f}%/V={val_mape:.2f}% (patience: {patience_counter}/{early_stopping_patience})")
             
             # Check if early stopping should trigger
             if patience_counter >= early_stopping_patience:

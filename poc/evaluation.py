@@ -81,6 +81,35 @@ def calculate_mae(predictions):
     return mae
 
 
+def calculate_mape(predictions, epsilon=1e-10):
+    """
+    Calculate Mean Absolute Percentage Error (MAPE) as a percentage.
+
+    MAPE = (1/N) * sum(|true - pred| / |true|) * 100
+
+    Lower values indicate better performance. Uses epsilon in denominator to
+    avoid division by zero when true rating is zero (not applicable for 1-5 scale).
+
+    Args:
+        predictions: List of prediction tuples (uid, iid, true_r, est_r, ...)
+                    or list of tuples (uid, iid, true_r, est_r)
+        epsilon: Small value to avoid division by zero (default: 1e-10)
+
+    Returns:
+        float: MAPE value as a percentage (e.g. 15.3 for 15.3%)
+    """
+    pct_errors = []
+    for pred in predictions:
+        if len(pred) >= 4:
+            true_r = pred[2]
+            est_r = pred[3]
+        else:
+            continue
+        denom = max(abs(true_r), epsilon)
+        pct_errors.append(100.0 * abs(true_r - est_r) / denom)
+    return float(np.mean(pct_errors)) if pct_errors else 0.0
+
+
 def precision_at_k(predictions, k=10, threshold=4.0):
     """
     Calculate Precision@K.
@@ -617,6 +646,7 @@ def evaluate_model(predictions, k=10, threshold=4.0, verbose=True,
     results = {
         'rmse': calculate_rmse(predictions),
         'mae': calculate_mae(predictions),
+        'mape': calculate_mape(predictions),
         f'precision@{k}': precision_at_k(predictions, k=k, threshold=threshold),
         f'recall@{k}': recall_at_k(predictions, k=k, threshold=threshold),
         f'ndcg@{k}': ndcg_at_k(predictions, k=k, threshold=threshold),
@@ -643,6 +673,7 @@ def evaluate_model(predictions, k=10, threshold=4.0, verbose=True,
         print(f"\nRating Prediction Metrics:")
         print(f"  RMSE: {results['rmse']:.4f}")
         print(f"  MAE:  {results['mae']:.4f}")
+        print(f"  MAPE: {results['mape']:.2f}%")
         
         print(f"\nRanking Metrics (K={k}, threshold={threshold}):")
         print(f"  Precision@{k}: {results[f'precision@{k}']:.4f}")

@@ -293,6 +293,29 @@ def _get_schema_superset():
         return None, None
 
 
+def get_occupations_from_dataset():
+    """
+    Load unique occupations from MovieLens u.user.
+    Returns sorted list for UI dropdowns and preprocessor fitting.
+    Falls back to ['other'] if u.user unavailable.
+    """
+    occ_schema, _ = _get_schema_superset()
+    if occ_schema is not None:
+        return sorted(occ_schema.tolist()) + ['other']
+    return ['other']
+
+
+def get_genders_from_dataset():
+    """
+    Load unique genders from MovieLens u.user.
+    Returns sorted list for preprocessor fitting. Falls back to ['M', 'F'] if unavailable.
+    """
+    _, gen_schema = _get_schema_superset()
+    if gen_schema is not None:
+        return sorted(gen_schema.tolist())
+    return ['M', 'F']
+
+
 class FeaturePreprocessor:
     """
     Preprocess and normalize user/item features for Factorization Machines.
@@ -325,13 +348,15 @@ class FeaturePreprocessor:
         # Fit year scaler (use .values to avoid feature name warnings)
         self.year_scaler.fit(item_df[['release_year']].values)
         
-        # Fit encoders on superset of training data + schema from MovieLens u.user.
-        # Ensures API-created users with any valid occupation/gender work at inference.
+        # Fit encoders on superset of training data + schema from dataset.
+        # Uses same get_occupations_from_dataset/get_genders_from_dataset as UI - ensures
+        # API-created users with any valid occupation/gender work at inference.
         occ_train = user_df['occupation'].unique()
         gen_train = user_df['gender'].unique()
-        occ_schema, gen_schema = _get_schema_superset()
-        occ_all = np.union1d(occ_train, occ_schema) if occ_schema is not None else occ_train
-        gen_all = np.union1d(gen_train, gen_schema) if gen_schema is not None else gen_train
+        occ_schema = np.array(get_occupations_from_dataset())
+        gen_schema = np.array(get_genders_from_dataset())
+        occ_all = np.union1d(occ_train, occ_schema)
+        gen_all = np.union1d(gen_train, gen_schema)
         self.occupation_encoder.fit(occ_all)
         self.gender_encoder.fit(gen_all)
         
@@ -385,13 +410,19 @@ class FeaturePreprocessor:
             age_idx = self.feature_offset['user_features']
             features[age_idx] = age_norm
             
-            # Gender (one-hot)
-            gender_encoded = self.gender_encoder.transform([row['gender']])[0]
+            # Gender (one-hot) - fallback for unseen labels (e.g. old preprocessor artifacts)
+            gender_val = row['gender']
+            if gender_val not in self.gender_encoder.classes_:
+                gender_val = self.gender_encoder.classes_[0]
+            gender_encoded = self.gender_encoder.transform([gender_val])[0]
             gender_idx = self.feature_offset['user_features'] + 1 + gender_encoded
             features[gender_idx] = 1.0
             
-            # Occupation (one-hot)
-            occ_encoded = self.occupation_encoder.transform([row['occupation']])[0]
+            # Occupation (one-hot) - fallback for unseen labels (e.g. old preprocessor artifacts)
+            occ_val = row['occupation']
+            if occ_val not in self.occupation_encoder.classes_:
+                occ_val = 'other' if 'other' in self.occupation_encoder.classes_ else self.occupation_encoder.classes_[0]
+            occ_encoded = self.occupation_encoder.transform([occ_val])[0]
             n_genders = len(self.gender_encoder.classes_)
             occ_idx = self.feature_offset['user_features'] + 1 + n_genders + occ_encoded
             features[occ_idx] = 1.0

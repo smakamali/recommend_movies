@@ -8,7 +8,7 @@ model:
 training:
   learning_rate: 0.001
   batch_size: 512
-  num_epochs: 150
+  num_epochs: 5
   early_stopping_patience: 12
   early_stopping_min_delta: 0.0001
   loss_type: mse
