@@ -12,8 +12,9 @@ Complete guide for the database layer of the GraphSAGE recommender system built 
 4. [Data Import](#data-import)
 5. [API Reference](#api-reference)
 6. [Scripts](#scripts)
-7. [Troubleshooting](#troubleshooting)
-8. [Architecture](#architecture)
+7. [Migrations](#migrations)
+8. [Troubleshooting](#troubleshooting)
+9. [Architecture](#architecture)
 
 ---
 
@@ -65,6 +66,7 @@ session.close()
 ```sql
 CREATE TABLE users (
     user_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name VARCHAR(100),  -- optional display name (added in migration)
     age INTEGER NOT NULL,
     gender TEXT NOT NULL CHECK(gender IN ('M', 'F', 'O')),
     occupation TEXT NOT NULL,
@@ -372,6 +374,22 @@ python scripts/demo_database.py
 - Rating statistics
 - ORM relationships
 - Pagination
+
+---
+
+## Migrations
+
+For existing databases created before schema updates, run migration scripts as needed.
+
+### Add User Name Column (v1.1+)
+
+If you have an existing database from before the `name` field was added to users:
+
+```bash
+python scripts/add_user_name_column.py
+```
+
+New installations get the column automatically via `create_all()`. The migration is idempotent (safe to run multiple times).
 
 ---
 

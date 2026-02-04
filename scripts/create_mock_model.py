@@ -115,6 +115,7 @@ def create_mock_model_artifacts(output_dir: str = "models/current"):
             "num_layers": num_layers,
             "dropout": dropout,
             "aggregator": aggregator,
+            "loss_type": "mse",
             "learning_rate": 0.001,
             "batch_size": 512,
             "num_epochs": 0

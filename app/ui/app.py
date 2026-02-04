@@ -43,7 +43,13 @@ st.divider()
 # Navigation
 user_id = st.session_state.get("user_id")
 if user_id:
-    st.subheader(f"Welcome, User #{user_id}")
+    try:
+        from app.ui.utils.api_client import get_user
+        user = get_user(user_id)
+        display_name = user.get("name") or f"User #{user_id}"
+    except Exception:
+        display_name = f"User #{user_id}"
+    st.subheader(f"Welcome, {display_name}")
     col1, col2 = st.columns(2)
     with col1:
         if st.button("📋 My Profile", use_container_width=True):

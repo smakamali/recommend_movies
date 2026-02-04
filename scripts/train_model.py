@@ -150,8 +150,20 @@ Examples:
         '--loss-type',
         type=str,
         default=t["loss_type"],
-        choices=['mse', 'mae', 'bce'],
+        choices=['mse', 'bpr', 'combined'],
         help=f'Loss function (default from config: {t["loss_type"]})'
+    )
+    parser.add_argument(
+        '--mse-weight',
+        type=float,
+        default=0.5,
+        help='Weight for MSE component in combined loss (default: 0.5)'
+    )
+    parser.add_argument(
+        '--bpr-weight',
+        type=float,
+        default=0.5,
+        help='Weight for BPR component in combined loss (default: 0.5)'
     )
     parser.add_argument(
         '--lr', '--learning-rate',
@@ -219,6 +231,8 @@ Examples:
         print(f"  Architecture: {args.num_layers} layers x {args.hidden_dim}d ({args.aggregator})")
         print(f"  Training: {args.epochs} epochs, batch={args.batch_size}, lr={args.learning_rate}")
         print(f"  Loss: {args.loss_type}")
+        if args.loss_type == 'combined':
+            print(f"  MSE weight: {args.mse_weight}, BPR weight: {args.bpr_weight}")
         print(f"  Output: {args.output_dir}")
         print(f"  Device: {device if device else 'auto-detect'}")
         print("="*60)
@@ -231,6 +245,8 @@ Examples:
             aggregator=args.aggregator,
             dropout=args.dropout,
             loss_type=args.loss_type,
+            mse_weight=args.mse_weight,
+            bpr_weight=args.bpr_weight,
             learning_rate=args.learning_rate,
             batch_size=args.batch_size,
             num_epochs=args.epochs,

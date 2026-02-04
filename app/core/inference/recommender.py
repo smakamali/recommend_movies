@@ -33,7 +33,8 @@ class Recommender:
         self,
         model: GraphSAGERecommender,
         rating_scaler: Any,
-        device: str = 'cpu'
+        device: str = 'cpu',
+        loss_type: str = 'mse'
     ):
         """
         Initialize recommender.
@@ -42,14 +43,19 @@ class Recommender:
             model: Trained GraphSAGE model
             rating_scaler: Fitted MinMaxScaler for inverse transform of predictions to 1-5
             device: Device to run inference on ('cpu' or 'cuda')
+            loss_type: Loss used to train the model ('mse', 'bpr', 'combined'). Must match
+                training so ranking (compute_scores) and displayed rating (predict_rating)
+                use the correct signal.
         """
         self.model = model
         self.rating_scaler = rating_scaler
         self.device = device
+        raw = str(loss_type).lower() if loss_type else 'mse'
+        self.loss_type = raw if raw in ('mse', 'bpr', 'combined') else 'mse'
         self.model.to(device)
         self.model.eval()
         
-        logger.info(f"Recommender initialized on device: {device}")
+        logger.info(f"Recommender initialized on device: {device}, loss_type={self.loss_type}")
     
     def generate_embeddings(
         self,
@@ -88,6 +94,7 @@ class Recommender:
     ) -> torch.Tensor:
         """
         Compute recommendation scores for all items for a given user.
+        Uses predicted rating (rating head) when loss_type is MSE; dot product for BPR/combined.
         
         Args:
             user_emb: User embeddings (num_users, hidden_dim)
@@ -97,12 +104,30 @@ class Recommender:
         Returns:
             Tensor of scores for all items (num_items,)
         """
-        # Get user embedding
-        user_embedding = user_emb[user_idx:user_idx+1]  # (1, hidden_dim)
-        
-        # Compute dot product with all item embeddings
-        scores = torch.matmul(user_embedding, item_emb.t()).squeeze(0)  # (num_items,)
-        
+        num_items = item_emb.size(0)
+        if self.loss_type == 'mse':
+            # MSE: rank by predicted rating (rating head); batch over items
+            batch_size = 1024
+            scores_list = []
+            for start in range(0, num_items, batch_size):
+                end = min(start + batch_size, num_items)
+                chunk_size = end - start
+                user_idx_tensor = torch.full(
+                    (chunk_size,), user_idx, dtype=torch.long, device=user_emb.device
+                )
+                item_indices = torch.arange(start, end, dtype=torch.long, device=user_emb.device)
+                pred_scaled = self.model.predict(
+                    user_emb, item_emb, user_idx_tensor, item_indices, use_rating_head=True
+                )
+                pred_1_5 = self.rating_scaler.inverse_transform(
+                    pred_scaled.detach().cpu().numpy().reshape(-1, 1)
+                ).flatten()
+                scores_list.append(torch.tensor(pred_1_5, dtype=torch.float32, device=user_emb.device))
+            scores = torch.cat(scores_list, dim=0)
+        else:
+            # BPR or combined: rank by dot product
+            user_embedding = user_emb[user_idx:user_idx + 1]
+            scores = torch.matmul(user_embedding, item_emb.t()).squeeze(0)
         return scores
     
     def get_recommendations(
@@ -233,6 +258,7 @@ class Recommender:
     ) -> float:
         """
         Predict rating for a specific user-item pair.
+        Uses rating head for MSE/combined; for BPR returns a preference score derived from dot product [1, 5].
         
         Args:
             user_emb: User embeddings
@@ -244,12 +270,19 @@ class Recommender:
             Predicted rating value in [1, 5]
         """
         with torch.no_grad():
-            pred_scaled = self.model.predict(user_emb, item_emb, user_idx, item_idx, use_rating_head=True)
-        
-        # Inverse transform from [0, 1] to [1, 5]
-        pred_rating = float(
-            self.rating_scaler.inverse_transform([[pred_scaled.item()]])[0, 0]
-        )
+            if self.loss_type in ('mse', 'combined'):
+                pred_scaled = self.model.predict(
+                    user_emb, item_emb, user_idx, item_idx, use_rating_head=True
+                )
+                pred_rating = float(
+                    self.rating_scaler.inverse_transform([[pred_scaled.item()]])[0, 0]
+                )
+            else:
+                # BPR: rating head untrained; return dot-product-derived preference score in [1, 5]
+                dot = self.model.predict(
+                    user_emb, item_emb, user_idx, item_idx, use_rating_head=False
+                )
+                pred_rating = float(1.0 + 4.0 * torch.sigmoid(dot).item())
         return pred_rating
     
     def batch_predict_ratings(
@@ -261,6 +294,7 @@ class Recommender:
     ) -> List[float]:
         """
         Predict ratings for multiple user-item pairs.
+        Uses rating head for MSE/combined; for BPR returns dot-product-derived preference scores [1, 5].
         
         Args:
             user_emb: User embeddings
@@ -277,10 +311,18 @@ class Recommender:
         predictions = []
         with torch.no_grad():
             for user_idx, item_idx in zip(user_indices, item_indices):
-                pred_scaled = self.model.predict(user_emb, item_emb, user_idx, item_idx, use_rating_head=True)
-                pred_rating = float(
-                    self.rating_scaler.inverse_transform([[pred_scaled.item()]])[0, 0]
-                )
+                if self.loss_type in ('mse', 'combined'):
+                    pred_scaled = self.model.predict(
+                        user_emb, item_emb, user_idx, item_idx, use_rating_head=True
+                    )
+                    pred_rating = float(
+                        self.rating_scaler.inverse_transform([[pred_scaled.item()]])[0, 0]
+                    )
+                else:
+                    dot = self.model.predict(
+                        user_emb, item_emb, user_idx, item_idx, use_rating_head=False
+                    )
+                    pred_rating = float(1.0 + 4.0 * torch.sigmoid(dot).item())
                 predictions.append(pred_rating)
         
         return predictions

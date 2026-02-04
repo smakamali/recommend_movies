@@ -23,6 +23,7 @@ def get_recommendations(
     user_id: int,
     n: int = Query(10, ge=1, le=100),
     exclude_low_rated: bool = Query(True),
+    exclude_already_rated: bool = Query(False, description="Exclude movies the user has already rated"),
     db: Session = Depends(get_db),
     engine: InferenceEngine = Depends(get_inference_engine),
 ):
@@ -43,21 +44,26 @@ def get_recommendations(
             user_id=user_id,
             n=n,
             exclude_low_rated=exclude_low_rated,
-            exclude_already_rated=False,  # Only exclude poorly rated (<=2)
+            exclude_already_rated=exclude_already_rated,
             force_refresh=False,
         )
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e))
-    items = [
-        RecommendationItem(
-            movie_id=r["movie_id"],
-            title=r["title"],
-            release_year=r.get("release_year"),
-            genres=r.get("genres", "[]"),
-            score=float(r.get("score", 0)),
+    items = []
+    for r in recs:
+        movie_id = r["movie_id"]
+        existing = crud.get_rating_by_user_movie(db, user_id, movie_id)
+        user_rating = float(existing.rating) if existing else None
+        items.append(
+            RecommendationItem(
+                movie_id=movie_id,
+                title=r["title"],
+                release_year=r.get("release_year"),
+                genres=r.get("genres", "[]"),
+                score=float(r.get("score", 0)),
+                user_rating=user_rating,
+            )
         )
-        for r in recs
-    ]
     return RecommendationResponse(user_id=user_id, recommendations=items, n=len(items))
 
 
@@ -65,6 +71,7 @@ def get_recommendations(
 def refresh_recommendations(
     user_id: int,
     n: int = Query(10, ge=1, le=100),
+    exclude_already_rated: bool = Query(False, description="Exclude movies the user has already rated"),
     db: Session = Depends(get_db),
     engine: InferenceEngine = Depends(get_inference_engine),
 ):
@@ -80,17 +87,24 @@ def refresh_recommendations(
     if not user_obj:
         raise HTTPException(status_code=404, detail="User not found")
     try:
-        recs = engine.refresh_recommendations(db, user_id=user_id, n=n)
+        recs = engine.refresh_recommendations(
+            db, user_id=user_id, n=n, exclude_already_rated=exclude_already_rated
+        )
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e))
-    items = [
-        RecommendationItem(
-            movie_id=r["movie_id"],
-            title=r["title"],
-            release_year=r.get("release_year"),
-            genres=r.get("genres", "[]"),
-            score=float(r.get("score", 0)),
+    items = []
+    for r in recs:
+        movie_id = r["movie_id"]
+        existing = crud.get_rating_by_user_movie(db, user_id, movie_id)
+        user_rating = float(existing.rating) if existing else None
+        items.append(
+            RecommendationItem(
+                movie_id=movie_id,
+                title=r["title"],
+                release_year=r.get("release_year"),
+                genres=r.get("genres", "[]"),
+                score=float(r.get("score", 0)),
+                user_rating=user_rating,
+            )
         )
-        for r in recs
-    ]
     return RecommendationResponse(user_id=user_id, recommendations=items, n=len(items))

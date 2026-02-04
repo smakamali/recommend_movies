@@ -68,12 +68,12 @@ class GraphSAGERecommender(nn.Module):
                     SAGEConv(hidden_dim, hidden_dim, aggr=aggregator)
                 )
         
-        # Rating prediction head: maps dot product to [0, 1] via sigmoid (inverse transform at inference)
+        # Rating prediction head: maps concatenated [user_emb, item_emb] to [0, 1] via sigmoid (inverse transform at inference)
         self.rating_head = nn.Sequential(
-            nn.Linear(1, 16),
+            nn.Linear(2 * hidden_dim, 32),
             nn.ReLU(),
             nn.Dropout(0.1),
-            nn.Linear(16, 1),
+            nn.Linear(32, 1),
             nn.Sigmoid()
         )
         
@@ -167,15 +167,13 @@ class GraphSAGERecommender(nn.Module):
         else:
             item_emb_selected = item_emb[item_idx]
         
-        # Dot product for score
-        scores = (user_emb_selected * item_emb_selected).sum(dim=1, keepdim=True)
-        
         if use_rating_head and hasattr(self, 'rating_head'):
-            # Use learned mapping to [0, 1] (inverse transform to 1-5 at inference)
-            scores = self.rating_head(scores).squeeze(-1)
+            # Concatenated embeddings as input to rating head (preserves full information)
+            link_emb = torch.cat([user_emb_selected, item_emb_selected], dim=-1)  # (B, 2*hidden_dim)
+            scores = self.rating_head(link_emb).squeeze(-1)
         else:
-            # Fallback: simple clipping (for BPR-only mode)
-            scores = scores.squeeze(-1)
+            # Dot product for BPR and compute_scores (ranking signal)
+            scores = (user_emb_selected * item_emb_selected).sum(dim=1)
         
         return scores
 

@@ -18,7 +18,8 @@ def create_user(
     age: int,
     gender: str,
     occupation: str,
-    zip_code: Optional[str] = None
+    zip_code: Optional[str] = None,
+    name: Optional[str] = None,
 ) -> User:
     """
     Create a new user.
@@ -29,6 +30,7 @@ def create_user(
         gender: User's gender ('M', 'F', or 'O')
         occupation: User's occupation
         zip_code: User's zip code (optional)
+        name: User's display name (optional)
         
     Returns:
         Created User object
@@ -43,7 +45,8 @@ def create_user(
         age=age,
         gender=gender,
         occupation=occupation,
-        zip_code=zip_code
+        zip_code=zip_code,
+        name=name,
     )
     session.add(user)
     session.commit()
