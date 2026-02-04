@@ -91,11 +91,19 @@ class InferenceEngine:
         # Load model artifacts
         self.model, self.preprocessor, self.metadata, rating_scaler = self.model_loader.load_model(force_reload)
         
+        # Resolve loss_type for prediction path (ranking and rating display)
+        raw = (self.metadata.get('hyperparameters') or {}).get('loss_type') or self.metadata.get('loss_type', 'mse')
+        loss_type = str(raw).lower() if raw else 'mse'
+        if loss_type not in ('mse', 'bpr', 'combined'):
+            loss_type = 'mse'
+        
         # Initialize feature processor
         self.feature_processor = FeatureProcessor(self.preprocessor)
         
-        # Initialize recommender
-        self.recommender = Recommender(self.model, rating_scaler, device=self.device)
+        # Initialize recommender with loss_type so ranking/rating use correct signal
+        self.recommender = Recommender(
+            self.model, rating_scaler, device=self.device, loss_type=loss_type
+        )
         
         model_info = self.model_loader.get_model_info()
         logger.info(f"Model loaded: version {model_info.get('version', 'unknown')}")

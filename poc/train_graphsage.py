@@ -39,21 +39,26 @@ class BPRLoss(nn.Module):
         super(BPRLoss, self).__init__()
         self.reg_lambda = reg_lambda
     
-    def forward(self, pos_scores, neg_scores, model_params=None):
+    def forward(self, pos_scores, neg_scores, model_params=None, weights=None):
         """
-        Compute BPR loss.
+        Compute BPR loss (optionally weighted for graded BPR).
         
         Args:
             pos_scores: Scores for positive pairs (batch_size,)
             neg_scores: Scores for negative pairs (batch_size,)
             model_params: Optional model parameters for regularization
+            weights: Optional per-pair weights (batch_size,) for graded BPR; larger rating gap -> higher weight
             
         Returns:
             torch.Tensor: BPR loss value
         """
         # BPR loss: -log(σ(pos_score - neg_score))
         diff = pos_scores - neg_scores
-        loss = -torch.mean(torch.log(torch.sigmoid(diff) + 1e-10))
+        log_sigmoid = torch.log(torch.sigmoid(diff) + 1e-10)
+        if weights is not None:
+            loss = -(weights * log_sigmoid).mean()
+        else:
+            loss = -torch.mean(log_sigmoid)
         
         # Add L2 regularization if model parameters provided
         if model_params is not None and self.reg_lambda > 0:
@@ -124,7 +129,7 @@ class CombinedLoss(nn.Module):
         self.bpr_weight = bpr_weight
         
     def forward(self, pred_ratings, true_ratings, pos_scores=None, 
-                neg_scores=None, model_params=None):
+                neg_scores=None, model_params=None, bpr_weights=None):
         """
         Compute combined loss.
         
@@ -134,6 +139,7 @@ class CombinedLoss(nn.Module):
             pos_scores: Optional scores for positive pairs (for BPR)
             neg_scores: Optional scores for negative pairs (for BPR)
             model_params: Optional model parameters for regularization
+            bpr_weights: Optional per-pair weights for graded BPR (batch_size,)
             
         Returns:
             torch.Tensor: Combined loss value
@@ -144,20 +150,23 @@ class CombinedLoss(nn.Module):
         
         # BPR component (optional)
         if pos_scores is not None and neg_scores is not None:
-            bpr = self.bpr_loss(pos_scores, neg_scores, model_params)
+            bpr = self.bpr_loss(pos_scores, neg_scores, model_params, weights=bpr_weights)
             loss += self.bpr_weight * bpr
             
         return loss
 
 
-def _compute_mae(model, graph_data, pairs, rating_scaler, device, batch_size):
+def _compute_mae(model, graph_data, pairs, rating_scaler, device, batch_size, loss_type='mse'):
     """
     Compute MAE (1-5 scale) for a list of (user_idx, item_idx, true_rating) pairs.
     true_rating is in original 1-5 scale.
+    For MSE/combined use rating head; for BPR use dot-product-derived [1,5] (proxy metric).
     """
     if not pairs:
         return 0.0
     model.eval()
+    lt = (str(loss_type).lower() if loss_type else 'mse')
+    lt = lt if lt in ('mse', 'bpr', 'combined') else 'mse'
     errors = []
     with torch.no_grad():
         user_emb, item_emb = model(graph_data)
@@ -167,22 +176,29 @@ def _compute_mae(model, graph_data, pairs, rating_scaler, device, batch_size):
             users = torch.tensor([p[0] for p in batch], dtype=torch.long, device=device)
             items = torch.tensor([p[1] for p in batch], dtype=torch.long, device=device)
             true_ratings = np.array([p[2] for p in batch], dtype=np.float64)  # 1-5
-            pred_scaled = model.predict(user_emb, item_emb, users, items, use_rating_head=True)
-            pred_1_5 = rating_scaler.inverse_transform(
-                pred_scaled.cpu().numpy().reshape(-1, 1)
-            ).flatten()
+            if lt in ('mse', 'combined'):
+                pred_scaled = model.predict(user_emb, item_emb, users, items, use_rating_head=True)
+                pred_1_5 = rating_scaler.inverse_transform(
+                    pred_scaled.cpu().numpy().reshape(-1, 1)
+                ).flatten()
+            else:
+                dots = model.predict(user_emb, item_emb, users, items, use_rating_head=False)
+                pred_1_5 = (1.0 + 4.0 * torch.sigmoid(dots).cpu().numpy()).astype(np.float64)
             errors.extend(np.abs(true_ratings - pred_1_5))
     return float(np.mean(errors))
 
 
-def _compute_mape(model, graph_data, pairs, rating_scaler, device, batch_size, epsilon=1e-10):
+def _compute_mape(model, graph_data, pairs, rating_scaler, device, batch_size, loss_type='mse', epsilon=1e-10):
     """
     Compute MAPE in percent (1-5 scale) for a list of (user_idx, item_idx, true_rating) pairs.
     MAPE = mean(|true - pred| / |true|) * 100.
+    For MSE/combined use rating head; for BPR use dot-product-derived [1,5] (proxy metric).
     """
     if not pairs:
         return 0.0
     model.eval()
+    lt = (str(loss_type).lower() if loss_type else 'mse')
+    lt = lt if lt in ('mse', 'bpr', 'combined') else 'mse'
     pct_errors = []
     with torch.no_grad():
         user_emb, item_emb = model(graph_data)
@@ -192,13 +208,46 @@ def _compute_mape(model, graph_data, pairs, rating_scaler, device, batch_size, e
             users = torch.tensor([p[0] for p in batch], dtype=torch.long, device=device)
             items = torch.tensor([p[1] for p in batch], dtype=torch.long, device=device)
             true_ratings = np.array([p[2] for p in batch], dtype=np.float64)  # 1-5
-            pred_scaled = model.predict(user_emb, item_emb, users, items, use_rating_head=True)
-            pred_1_5 = rating_scaler.inverse_transform(
-                pred_scaled.cpu().numpy().reshape(-1, 1)
-            ).flatten()
+            if lt in ('mse', 'combined'):
+                pred_scaled = model.predict(user_emb, item_emb, users, items, use_rating_head=True)
+                pred_1_5 = rating_scaler.inverse_transform(
+                    pred_scaled.cpu().numpy().reshape(-1, 1)
+                ).flatten()
+            else:
+                dots = model.predict(user_emb, item_emb, users, items, use_rating_head=False)
+                pred_1_5 = (1.0 + 4.0 * torch.sigmoid(dots).cpu().numpy()).astype(np.float64)
             denom = np.maximum(np.abs(true_ratings), epsilon)
             pct_errors.extend(100.0 * np.abs(true_ratings - pred_1_5) / denom)
     return float(np.mean(pct_errors))
+
+
+def _sample_graded_bpr_pair(user_rated_items, users_with_graded):
+    """
+    Sample one graded BPR pair: (user, pos_item, neg_item) where both items are rated
+    by the user and rating(pos_item) > rating(neg_item).
+    
+    Args:
+        user_rated_items: dict user_idx -> list of (item_idx, rating)
+        users_with_graded: list of user_idx that have at least two rated items with different ratings
+        
+    Returns:
+        tuple: (user_idx, pos_item, neg_item, weight) or None if no valid pair possible.
+        weight = 1 + (r_pos - r_neg) / 4.0 so that 5 vs 1 is penalized more than 4 vs 3.
+    """
+    if not users_with_graded:
+        return None
+    user_idx = np.random.choice(users_with_graded)
+    rated = user_rated_items[user_idx]
+    if len(rated) < 2:
+        return None
+    # Sample two distinct (item, rating) with r_pos > r_neg
+    i, j = np.random.choice(len(rated), size=2, replace=False)
+    (pos_item, r_pos), (neg_item, r_neg) = rated[i], rated[j]
+    if r_pos <= r_neg:
+        pos_item, neg_item = neg_item, pos_item
+        r_pos, r_neg = r_neg, r_pos
+    weight = 1.0 + (r_pos - r_neg) / 4.0
+    return (user_idx, pos_item, neg_item, weight)
 
 
 def train_graphsage_model(model, graph_data, trainset, user_id_to_idx, item_id_to_idx,
@@ -241,6 +290,7 @@ def train_graphsage_model(model, graph_data, trainset, user_id_to_idx, item_id_t
     positive_pairs = []
     user_positive_items = defaultdict(set)
     user_item_ratings = {}  # For MSE loss: (user_idx, item_idx) -> rating
+    user_rated_items = defaultdict(list)  # user_idx -> [(item_idx, rating), ...] for graded BPR
     
     for inner_uid, inner_iid, rating in trainset.all_ratings():
         uid = trainset.to_raw_uid(inner_uid)
@@ -255,6 +305,18 @@ def train_graphsage_model(model, graph_data, trainset, user_id_to_idx, item_id_t
         positive_pairs.append((user_idx, item_idx, rating))
         user_positive_items[user_idx].add(item_idx)
         user_item_ratings[(user_idx, item_idx)] = rating
+        user_rated_items[user_idx].append((item_idx, float(rating)))
+    
+    # Users with at least two rated items and at least one pair with different ratings (for graded BPR)
+    users_with_graded = [
+        u for u, rated in user_rated_items.items()
+        if len(rated) >= 2 and len(set(r for _, r in rated)) >= 2
+    ]
+    if loss_type in ['bpr', 'combined'] and not users_with_graded:
+        raise ValueError(
+            "No users with at least two differently-rated items for graded BPR. "
+            "Graded BPR requires (pos, neg) pairs where both are rated and rating(pos) > rating(neg)."
+        )
     
     # Split data into train and validation sets
     np.random.shuffle(positive_pairs)
@@ -329,30 +391,53 @@ def train_graphsage_model(model, graph_data, trainset, user_id_to_idx, item_id_t
             batch_items = []
             batch_ratings = []
             batch_neg_items = []
+            batch_bpr_weights = []
             
-            for idx in batch_indices:
-                user_idx, item_idx, rating = train_pairs[idx]
-                batch_users.append(user_idx)
-                batch_items.append(item_idx)
-                batch_ratings.append(
-                    float(rating_scaler.transform([[rating]])[0, 0])
-                )
-                
-                # Sample negative items (for BPR/combined loss)
-                if loss_type in ['bpr', 'combined']:
-                    neg_samples = []
-                    attempts = 0
-                    while len(neg_samples) < num_negatives and attempts < 100:
-                        neg_item_idx = np.random.choice(all_item_indices)
-                        if neg_item_idx not in user_positive_items[user_idx]:
-                            neg_samples.append(neg_item_idx)
-                        attempts += 1
-                    
-                    # If couldn't find enough negatives, use random (may include positives)
-                    while len(neg_samples) < num_negatives:
-                        neg_samples.append(np.random.choice(all_item_indices))
-                    
-                    batch_neg_items.extend(neg_samples[:num_negatives])
+            if loss_type in ['bpr', 'combined']:
+                # Graded BPR: sample (user, pos_item, neg_item) where both rated and rating(pos) > rating(neg)
+                max_attempts = batch_size * 10
+                attempts = 0
+                while len(batch_users) < batch_size and attempts < max_attempts:
+                    pair = _sample_graded_bpr_pair(user_rated_items, users_with_graded)
+                    if pair is not None:
+                        user_idx, pos_item, neg_item, weight = pair
+                        batch_users.append(user_idx)
+                        batch_items.append(pos_item)
+                        batch_neg_items.append(neg_item)
+                        batch_bpr_weights.append(weight)
+                        if loss_type == 'combined':
+                            r_pos = user_item_ratings[(user_idx, pos_item)]
+                            batch_ratings.append(
+                                float(rating_scaler.transform([[r_pos]])[0, 0])
+                            )
+                    attempts += 1
+                if len(batch_users) == 0:
+                    continue
+                # Pad to batch_size if we didn't get enough (rare)
+                while len(batch_users) < batch_size:
+                    pair = _sample_graded_bpr_pair(user_rated_items, users_with_graded)
+                    if pair is not None:
+                        user_idx, pos_item, neg_item, weight = pair
+                        batch_users.append(user_idx)
+                        batch_items.append(pos_item)
+                        batch_neg_items.append(neg_item)
+                        batch_bpr_weights.append(weight)
+                        if loss_type == 'combined':
+                            r_pos = user_item_ratings[(user_idx, pos_item)]
+                            batch_ratings.append(
+                                float(rating_scaler.transform([[r_pos]])[0, 0])
+                            )
+                    if len(batch_users) >= batch_size:
+                        break
+            else:
+                # MSE-only: use train_pairs as before
+                for idx in batch_indices:
+                    user_idx, item_idx, rating = train_pairs[idx]
+                    batch_users.append(user_idx)
+                    batch_items.append(item_idx)
+                    batch_ratings.append(
+                        float(rating_scaler.transform([[rating]])[0, 0])
+                    )
             
             # Forward pass: get embeddings
             user_emb, item_emb = model(graph_data)
@@ -360,7 +445,11 @@ def train_graphsage_model(model, graph_data, trainset, user_id_to_idx, item_id_t
             # Convert to tensors
             batch_users_tensor = torch.tensor(batch_users, dtype=torch.long, device=device)
             batch_items_tensor = torch.tensor(batch_items, dtype=torch.long, device=device)
-            batch_ratings_tensor = torch.tensor(batch_ratings, dtype=torch.float32, device=device)
+            if batch_ratings:
+                batch_ratings_tensor = torch.tensor(batch_ratings, dtype=torch.float32, device=device)
+            if loss_type in ['bpr', 'combined']:
+                batch_neg_items_tensor = torch.tensor(batch_neg_items, dtype=torch.long, device=device)
+                batch_bpr_weights_tensor = torch.tensor(batch_bpr_weights, dtype=torch.float32, device=device)
             
             # Compute loss based on loss_type
             if loss_type == 'mse':
@@ -370,42 +459,19 @@ def train_graphsage_model(model, graph_data, trainset, user_id_to_idx, item_id_t
                 loss = criterion(pred_ratings, batch_ratings_tensor)
                 
             elif loss_type == 'bpr':
-                # BPR loss: ranking with negative sampling
-                batch_neg_items_tensor = torch.tensor(batch_neg_items, dtype=torch.long, device=device)
-                
-                # Expand users for multiple negatives
-                if num_negatives > 1:
-                    batch_users_expanded = batch_users_tensor.repeat_interleave(num_negatives)
-                else:
-                    batch_users_expanded = batch_users_tensor
-                
-                pos_scores = model.predict(user_emb, item_emb, batch_users_tensor, 
-                                          batch_items_tensor, use_rating_head=False)
-                neg_scores = model.predict(user_emb, item_emb, batch_users_expanded, 
-                                          batch_neg_items_tensor, use_rating_head=False)
-                loss = criterion(pos_scores, neg_scores, model.parameters())
+                # Graded BPR: one (pos, neg) per sample, weighted by rating gap
+                pos_scores = (user_emb[batch_users_tensor] * item_emb[batch_items_tensor]).sum(dim=1)
+                neg_scores = (user_emb[batch_users_tensor] * item_emb[batch_neg_items_tensor]).sum(dim=1)
+                loss = criterion(pos_scores, neg_scores, model.parameters(), weights=batch_bpr_weights_tensor)
                 
             elif loss_type == 'combined':
-                # Combined loss: MSE for ratings + BPR for ranking
-                batch_neg_items_tensor = torch.tensor(batch_neg_items, dtype=torch.long, device=device)
-                
-                # Get predicted ratings (with rating head)
+                # Combined: MSE on (user, pos) rating + graded BPR with weights
                 pred_ratings = model.predict(user_emb, item_emb, batch_users_tensor, 
                                             batch_items_tensor, use_rating_head=True)
-                
-                # Get raw scores for BPR (without rating head)
                 pos_scores = (user_emb[batch_users_tensor] * item_emb[batch_items_tensor]).sum(dim=1)
-                
-                # Expand users for multiple negatives
-                if num_negatives > 1:
-                    batch_users_expanded = batch_users_tensor.repeat_interleave(num_negatives)
-                else:
-                    batch_users_expanded = batch_users_tensor
-                    
-                neg_scores = (user_emb[batch_users_expanded] * item_emb[batch_neg_items_tensor]).sum(dim=1)
-                
+                neg_scores = (user_emb[batch_users_tensor] * item_emb[batch_neg_items_tensor]).sum(dim=1)
                 loss = criterion(pred_ratings, batch_ratings_tensor, pos_scores, 
-                               neg_scores, model.parameters())
+                               neg_scores, model.parameters(), bpr_weights=batch_bpr_weights_tensor)
             
             # Backward pass
             optimizer.zero_grad()
@@ -419,9 +485,9 @@ def train_graphsage_model(model, graph_data, trainset, user_id_to_idx, item_id_t
         history['train_loss'].append(avg_loss)
         history['epoch'].append(epoch + 1)
         
-        # Compute training MAE and MAPE (1-5 scale)
-        train_mae = _compute_mae(model, graph_data, train_pairs, rating_scaler, device, batch_size)
-        train_mape = _compute_mape(model, graph_data, train_pairs, rating_scaler, device, batch_size)
+        # Compute training MAE and MAPE (1-5 scale; loss-dependent predictions)
+        train_mae = _compute_mae(model, graph_data, train_pairs, rating_scaler, device, batch_size, loss_type=loss_type)
+        train_mape = _compute_mape(model, graph_data, train_pairs, rating_scaler, device, batch_size, loss_type=loss_type)
         history['train_mae'].append(train_mae)
         history['train_mape'].append(train_mape)
         
@@ -434,89 +500,74 @@ def train_graphsage_model(model, graph_data, trainset, user_id_to_idx, item_id_t
             # Forward pass for validation
             user_emb, item_emb = model(graph_data)
             
-            # Process validation set in batches
-            for val_start in range(0, len(val_pairs), batch_size):
-                val_end = min(val_start + batch_size, len(val_pairs))
-                val_batch = val_pairs[val_start:val_end]
-                
-                val_users = []
-                val_items = []
-                val_ratings = []
-                val_neg_items = []
-                
-                for user_idx, item_idx, rating in val_batch:
-                    val_users.append(user_idx)
-                    val_items.append(item_idx)
-                    val_ratings.append(
-                        float(rating_scaler.transform([[rating]])[0, 0])
-                    )
-                    
-                    # Sample negative items for BPR/combined loss
-                    if loss_type in ['bpr', 'combined']:
-                        neg_samples = []
-                        attempts = 0
-                        while len(neg_samples) < num_negatives and attempts < 100:
-                            neg_item_idx = np.random.choice(all_item_indices)
-                            if neg_item_idx not in user_positive_items[user_idx]:
-                                neg_samples.append(neg_item_idx)
-                            attempts += 1
-                        
-                        while len(neg_samples) < num_negatives:
-                            neg_samples.append(np.random.choice(all_item_indices))
-                        
-                        val_neg_items.extend(neg_samples[:num_negatives])
-                
-                # Convert to tensors
-                val_users_tensor = torch.tensor(val_users, dtype=torch.long, device=device)
-                val_items_tensor = torch.tensor(val_items, dtype=torch.long, device=device)
-                val_ratings_tensor = torch.tensor(val_ratings, dtype=torch.float32, device=device)
-                
-                # Compute validation loss based on loss_type
-                if loss_type == 'mse':
-                    pred_ratings = model.predict(user_emb, item_emb, val_users_tensor, 
+            if loss_type == 'mse':
+                # MSE: iterate val_pairs in batches
+                for val_start in range(0, len(val_pairs), batch_size):
+                    val_end = min(val_start + batch_size, len(val_pairs))
+                    val_batch = val_pairs[val_start:val_end]
+                    val_users = [p[0] for p in val_batch]
+                    val_items = [p[1] for p in val_batch]
+                    val_ratings = [float(rating_scaler.transform([[p[2]]])[0, 0]) for p in val_batch]
+                    val_users_tensor = torch.tensor(val_users, dtype=torch.long, device=device)
+                    val_items_tensor = torch.tensor(val_items, dtype=torch.long, device=device)
+                    val_ratings_tensor = torch.tensor(val_ratings, dtype=torch.float32, device=device)
+                    pred_ratings = model.predict(user_emb, item_emb, val_users_tensor,
                                                 val_items_tensor, use_rating_head=True)
                     batch_val_loss = criterion(pred_ratings, val_ratings_tensor)
-                    
-                elif loss_type == 'bpr':
+                    val_loss += batch_val_loss.item()
+                    val_batches += 1
+            else:
+                # BPR/combined: graded BPR validation batches (sample graded pairs)
+                num_val_batches = max(1, len(val_pairs) // batch_size)
+                for _ in range(num_val_batches):
+                    val_users = []
+                    val_items = []
+                    val_ratings = []
+                    val_neg_items = []
+                    val_bpr_weights = []
+                    filled = 0
+                    attempts = 0
+                    while filled < batch_size and attempts < batch_size * 10:
+                        pair = _sample_graded_bpr_pair(user_rated_items, users_with_graded)
+                        if pair is not None:
+                            user_idx, pos_item, neg_item, weight = pair
+                            val_users.append(user_idx)
+                            val_items.append(pos_item)
+                            val_neg_items.append(neg_item)
+                            val_bpr_weights.append(weight)
+                            if loss_type == 'combined':
+                                r_pos = user_item_ratings[(user_idx, pos_item)]
+                                val_ratings.append(float(rating_scaler.transform([[r_pos]])[0, 0]))
+                            filled += 1
+                        attempts += 1
+                    if filled == 0:
+                        continue
+                    val_users_tensor = torch.tensor(val_users, dtype=torch.long, device=device)
+                    val_items_tensor = torch.tensor(val_items, dtype=torch.long, device=device)
                     val_neg_items_tensor = torch.tensor(val_neg_items, dtype=torch.long, device=device)
-                    
-                    if num_negatives > 1:
-                        val_users_expanded = val_users_tensor.repeat_interleave(num_negatives)
+                    val_bpr_weights_tensor = torch.tensor(val_bpr_weights, dtype=torch.float32, device=device)
+                    if loss_type == 'bpr':
+                        pos_scores = (user_emb[val_users_tensor] * item_emb[val_items_tensor]).sum(dim=1)
+                        neg_scores = (user_emb[val_users_tensor] * item_emb[val_neg_items_tensor]).sum(dim=1)
+                        batch_val_loss = criterion(pos_scores, neg_scores, model.parameters(),
+                                                   weights=val_bpr_weights_tensor)
                     else:
-                        val_users_expanded = val_users_tensor
-                    
-                    pos_scores = model.predict(user_emb, item_emb, val_users_tensor, 
-                                              val_items_tensor, use_rating_head=False)
-                    neg_scores = model.predict(user_emb, item_emb, val_users_expanded, 
-                                              val_neg_items_tensor, use_rating_head=False)
-                    batch_val_loss = criterion(pos_scores, neg_scores, model.parameters())
-                    
-                elif loss_type == 'combined':
-                    val_neg_items_tensor = torch.tensor(val_neg_items, dtype=torch.long, device=device)
-                    
-                    pred_ratings = model.predict(user_emb, item_emb, val_users_tensor, 
-                                                val_items_tensor, use_rating_head=True)
-                    pos_scores = (user_emb[val_users_tensor] * item_emb[val_items_tensor]).sum(dim=1)
-                    
-                    if num_negatives > 1:
-                        val_users_expanded = val_users_tensor.repeat_interleave(num_negatives)
-                    else:
-                        val_users_expanded = val_users_tensor
-                        
-                    neg_scores = (user_emb[val_users_expanded] * item_emb[val_neg_items_tensor]).sum(dim=1)
-                    
-                    batch_val_loss = criterion(pred_ratings, val_ratings_tensor, pos_scores, 
-                                             neg_scores, model.parameters())
-                
-                val_loss += batch_val_loss.item()
-                val_batches += 1
+                        val_ratings_tensor = torch.tensor(val_ratings, dtype=torch.float32, device=device)
+                        pred_ratings = model.predict(user_emb, item_emb, val_users_tensor,
+                                                     val_items_tensor, use_rating_head=True)
+                        pos_scores = (user_emb[val_users_tensor] * item_emb[val_items_tensor]).sum(dim=1)
+                        neg_scores = (user_emb[val_users_tensor] * item_emb[val_neg_items_tensor]).sum(dim=1)
+                        batch_val_loss = criterion(pred_ratings, val_ratings_tensor, pos_scores,
+                                                   neg_scores, model.parameters(), bpr_weights=val_bpr_weights_tensor)
+                    val_loss += batch_val_loss.item()
+                    val_batches += 1
         
         avg_val_loss = val_loss / val_batches if val_batches > 0 else 0.0
         history['val_loss'].append(avg_val_loss)
         
-        # Compute validation MAE and MAPE (1-5 scale)
-        val_mae = _compute_mae(model, graph_data, val_pairs, rating_scaler, device, batch_size)
-        val_mape = _compute_mape(model, graph_data, val_pairs, rating_scaler, device, batch_size)
+        # Compute validation MAE and MAPE (1-5 scale; loss-dependent predictions)
+        val_mae = _compute_mae(model, graph_data, val_pairs, rating_scaler, device, batch_size, loss_type=loss_type)
+        val_mape = _compute_mape(model, graph_data, val_pairs, rating_scaler, device, batch_size, loss_type=loss_type)
         history['val_mae'].append(val_mae)
         history['val_mape'].append(val_mape)
         

@@ -65,9 +65,12 @@ def built_graph(graph_manager, session):
 
 @pytest.fixture
 def recommender(loaded_artifacts):
-    """Create recommender."""
-    model, _, _, rating_scaler = loaded_artifacts
-    return Recommender(model, rating_scaler)
+    """Create recommender with loss_type from metadata (default mse)."""
+    model, _, metadata, rating_scaler = loaded_artifacts
+    lt = (metadata.get('hyperparameters') or {}).get('loss_type') or metadata.get('loss_type', 'mse')
+    lt = str(lt).lower() if lt else 'mse'
+    lt = lt if lt in ('mse', 'bpr', 'combined') else 'mse'
+    return Recommender(model, rating_scaler, loss_type=lt)
 
 
 class TestModelLoader:

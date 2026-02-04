@@ -220,10 +220,25 @@ class ModelLoader:
             aggregator=aggregator
         )
         
-        # Load trained weights
+        # Load trained weights (support old checkpoints with different rating_head shape)
         try:
             state_dict = torch.load(model_path, map_location=self.device, weights_only=False)
-            model.load_state_dict(state_dict)
+            model_state = model.state_dict()
+            # Filter to only keys that exist in model and have matching shapes
+            filtered = {}
+            skipped = []
+            for k, v in state_dict.items():
+                if k in model_state and model_state[k].shape == v.shape:
+                    filtered[k] = v
+                else:
+                    skipped.append(k)
+            if skipped:
+                logger.warning(
+                    "Checkpoint has keys that do not match current model (e.g. old rating head); "
+                    "loading matching weights only. Skipped: %s. Retrain and save a new model for full compatibility.",
+                    skipped,
+                )
+            model.load_state_dict(filtered, strict=False)
             model.to(self.device)
             model.eval()  # Set to evaluation mode
             logger.debug("Model weights loaded successfully")

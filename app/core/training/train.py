@@ -33,6 +33,8 @@ def train_model(
     aggregator: str = 'max',
     dropout: float = 0.1,
     loss_type: str = 'mse',
+    mse_weight: float = 1.0,
+    bpr_weight: float = 0.1,
     learning_rate: float = 0.001,
     batch_size: int = 512,
     num_epochs: int = 50,
@@ -186,6 +188,8 @@ def train_model(
         item_id_to_idx=item_id_map,
         rating_scaler=rating_scaler,
         loss_type=loss_type,
+        mse_weight=mse_weight,
+        bpr_weight=bpr_weight,
         num_epochs=num_epochs,
         batch_size=batch_size,
         learning_rate=learning_rate,
@@ -204,9 +208,11 @@ def train_model(
         print("Step 5: Evaluating on test set")
         print("-"*60)
     
-    # Generate predictions on test set
+    # Generate predictions on test set (loss-dependent: rating head for MSE/combined, dot-derived for BPR)
     trained_model.eval()
     predictions = []
+    lt = (str(loss_type).lower() if loss_type else 'mse')
+    lt = lt if lt in ('mse', 'bpr', 'combined') else 'mse'
     
     with torch.no_grad():
         # Get embeddings for all nodes
@@ -219,17 +225,20 @@ def train_model(
             user_idx = user_id_map[uid]
             item_idx = item_id_map[iid]
             
-            # Get prediction using precomputed embeddings (model outputs 0-1)
-            pred_scaled = trained_model.predict(
-                user_emb,
-                item_emb,
-                user_idx,
-                item_idx
-            )
-            # Inverse transform to rating scale 1-5
-            pred_rating = float(
-                rating_scaler.inverse_transform([[pred_scaled.item()]])[0, 0]
-            )
+            if lt in ('mse', 'combined'):
+                # Predicted rating from rating head, inverse transform to 1-5
+                pred_scaled = trained_model.predict(
+                    user_emb, item_emb, user_idx, item_idx, use_rating_head=True
+                )
+                pred_rating = float(
+                    rating_scaler.inverse_transform([[pred_scaled.item()]])[0, 0]
+                )
+            else:
+                # BPR: rating head untrained; use dot product mapped to [1, 5]
+                dot = trained_model.predict(
+                    user_emb, item_emb, user_idx, item_idx, use_rating_head=False
+                )
+                pred_rating = float(1.0 + 4.0 * torch.sigmoid(dot).item())
             predictions.append((uid, iid, true_rating, pred_rating))
     
     # Evaluate predictions
